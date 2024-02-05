@@ -26,10 +26,9 @@ import kotlin.coroutines.suspendCoroutine
 
 private val LOGGER = Logger.getLogger(Botbye::class.java.getName())
 
-object Botbye {
-
+class Botbye(
     private var botbyeConfig: BotbyeConfig = BotbyeConfig()
-
+) {
     private val writer: ObjectWriter = ObjectMapper().registerModule(
         SimpleModule().addSerializer(Headers::class.java, HeadersSerializer()),
     ).writer()
