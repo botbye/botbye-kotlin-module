@@ -1,13 +1,17 @@
 package com.botbye.model
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import java.util.UUID
 
 data class BotbyeError(
+    @JsonProperty("message")
     val message: String,
 )
 
 data class BotbyeChallengeResult(
+    @JsonProperty("isBot")
     val isBot: Boolean = false,
+    @JsonProperty("banRequired")
     val banRequired: Boolean = false,
 )
 
