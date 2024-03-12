@@ -9,10 +9,8 @@ data class BotbyeError(
 )
 
 data class BotbyeChallengeResult(
-    @JsonProperty("isBot")
-    val isBot: Boolean = false,
-    @JsonProperty("banRequired")
-    val banRequired: Boolean = false,
+    @JsonProperty("isAllowed")
+    val isAllowed: Boolean = true,
 )
 
 data class BotbyeResponse(
