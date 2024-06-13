@@ -9,6 +9,7 @@ data class BotbyeError(
 )
 
 data class BotbyeChallengeResult(
+    @get:JsonProperty("isAllowed")
     @JsonProperty("isAllowed")
     val isAllowed: Boolean = true,
 )

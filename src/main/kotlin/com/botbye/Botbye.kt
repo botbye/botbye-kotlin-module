@@ -1,6 +1,7 @@
 package com.botbye
 
 import com.botbye.model.BotbyeConfig
+import com.botbye.model.BotbyeError
 import com.botbye.model.BotbyeRequest
 import com.botbye.model.BotbyeResponse
 import com.botbye.model.ConnectionDetails
@@ -25,15 +26,17 @@ import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
 private val LOGGER = Logger.getLogger(Botbye::class.java.getName())
+private val mapper = ObjectMapper()
 
 class Botbye(
-    private var botbyeConfig: BotbyeConfig = BotbyeConfig()
+    private var botbyeConfig: BotbyeConfig,
 ) {
-    private val writer: ObjectWriter = ObjectMapper().registerModule(
+
+    private val writer: ObjectWriter = mapper.registerModule(
         SimpleModule().addSerializer(Headers::class.java, HeadersSerializer()),
     ).writer()
 
-    private val reader: ObjectReader = ObjectMapper().reader()
+    private val reader: ObjectReader = mapper.reader()
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectionPool(
@@ -75,7 +78,6 @@ class Botbye(
         if (botbyeConfig.serverKey.isBlank()) error("[BotBye] server key is not specified")
 
         val body = BotbyeRequest(
-            token = token,
             serverKey = botbyeConfig.serverKey,
             headers = headers,
             requestInfo = connectionDetails,
@@ -83,37 +85,40 @@ class Botbye(
         )
 
         val request = Request.Builder()
-            .url("${botbyeConfig.botbyeEndpoint}${botbyeConfig.path}")
+            .url("${botbyeConfig.botbyeEndpoint}${botbyeConfig.path}?$token")
             .post(
                 writer.writeValueAsString(body).toRequestBody(botbyeConfig.contentType),
             )
-            .addHeader("Module-Name", botbyeConfig.moduleName)
-            .addHeader("Module-Version", botbyeConfig.moduleVersion)
+            .header("Module-Name", botbyeConfig.moduleName)
+            .header("Module-Version", botbyeConfig.moduleVersion)
             .build()
 
-        val response = client.sendRequest(request)
+        val response = try {
+            handleResponse(
+                response = client.sendRequest(request),
+            )
+        } catch (e: Exception) {
+            LOGGER.warning("[BotBye] exception occurred: ${e.message}")
 
-        return response?.let { handleResponse(it) } ?: BotbyeResponse()
+            BotbyeResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
+        }
+
+        return response
     }
 }
 
-suspend fun OkHttpClient.sendRequest(request: Request): Response? {
-    return try {
-        suspendCoroutine { continuation ->
-            newCall(request).enqueue(
-                object : Callback {
-                    override fun onFailure(call: Call, e: IOException) {
-                        continuation.resumeWithException(e)
-                    }
+suspend fun OkHttpClient.sendRequest(request: Request): Response {
+    return suspendCoroutine { continuation ->
+        newCall(request).enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    continuation.resumeWithException(e)
+                }
 
-                    override fun onResponse(call: Call, response: Response) {
-                        continuation.resume(response)
-                    }
-                },
-            )
-        }
-    } catch (e: Exception) {
-        LOGGER.warning(e.message)
-        null
+                override fun onResponse(call: Call, response: Response) {
+                    continuation.resume(response)
+                }
+            },
+        )
     }
 }

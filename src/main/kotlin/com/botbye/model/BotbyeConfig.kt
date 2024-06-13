@@ -7,8 +7,8 @@ import java.util.concurrent.TimeUnit
 data class BotbyeConfig(
     var botbyeEndpoint: String = "https://api.botbye.com",
     var serverKey: String = "",
-    var path: String = "/validate-request/v1",
-    var connectionTimeout: Long = 5L,
+    var path: String = "/validate-request/v2",
+    var connectionTimeout: Long = 1L,
     var connectionTimeoutUnit: TimeUnit = TimeUnit.SECONDS,
     var connectionPoolSize: Int = 5,
     var keepAliveDuration: Long = 5L,
