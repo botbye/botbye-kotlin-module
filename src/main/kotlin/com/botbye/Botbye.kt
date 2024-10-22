@@ -73,7 +73,7 @@ class Botbye(
         token: String,
         connectionDetails: ConnectionDetails,
         headers: Headers,
-        customFields: List<String> = emptyList(),
+        customFields: Map<String, String> = emptyMap(),
     ): BotbyeResponse {
         if (botbyeConfig.serverKey.isBlank()) error("[BotBye] server key is not specified")
 

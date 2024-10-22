@@ -10,5 +10,5 @@ data class BotbyeRequest(
     @get:JsonProperty("request_info")
     val requestInfo: ConnectionDetails,
     @get:JsonProperty("custom_fields")
-    val customFields: List<String>,
+    val customFields: Map<String, String>,
 )
