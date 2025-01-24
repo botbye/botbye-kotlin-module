@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 
 data class BotbyeConfig(
     var botbyeEndpoint: String = "https://verify.botbye.com",
-    var serverKey: String = "",
+    var serverKey: String,
     var path: String = "/validate-request/v2",
     var connectionTimeout: Long = 1L,
     var connectionTimeoutUnit: TimeUnit = TimeUnit.SECONDS,
