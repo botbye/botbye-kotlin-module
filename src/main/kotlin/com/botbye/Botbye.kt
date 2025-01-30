@@ -70,7 +70,7 @@ class Botbye(
     }
 
     suspend fun validateRequest(
-        token: String,
+        token: String?,
         connectionDetails: ConnectionDetails,
         headers: Headers,
         customFields: Map<String, String> = emptyMap(),
@@ -85,7 +85,7 @@ class Botbye(
         )
 
         val request = Request.Builder()
-            .url("${botbyeConfig.botbyeEndpoint}${botbyeConfig.path}?$token")
+            .url("${botbyeConfig.botbyeEndpoint}${botbyeConfig.path}?${token ?: ""}")
             .post(
                 writer.writeValueAsString(body).toRequestBody(botbyeConfig.contentType),
             )
