@@ -14,6 +14,6 @@ data class BotbyeConfig(
     var keepAliveDuration: Long = 5L,
     var keepAliveDurationTimeUnit: TimeUnit = TimeUnit.MINUTES,
     var contentType: MediaType = "application/json".toMediaType(),
-    val moduleVersion: String = "0.0.1",
+    val moduleVersion: String = "0.0.2",
     val moduleName: String = "Kotlin",
 )
