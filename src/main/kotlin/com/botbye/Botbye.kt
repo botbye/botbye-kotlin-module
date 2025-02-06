@@ -12,12 +12,12 @@ import com.fasterxml.jackson.databind.module.SimpleModule
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 import java.util.logging.ConsoleHandler
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -38,18 +38,23 @@ class Botbye(
 
     private val reader: ObjectReader = mapper.reader()
 
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    private val client: OkHttpClient = OkHttpClient
+        .Builder()
+        .dispatcher(Dispatcher().apply {
+            maxRequests = botbyeConfig.maxRequests
+            maxRequestsPerHost = botbyeConfig.maxRequestsPerHost
+        })
         .connectionPool(
             ConnectionPool(
-                maxIdleConnections = botbyeConfig.connectionPoolSize,
+                maxIdleConnections = botbyeConfig.maxIdleConnections,
                 keepAliveDuration = botbyeConfig.keepAliveDuration,
-                timeUnit = botbyeConfig.keepAliveDurationTimeUnit,
-            ),
+                timeUnit = botbyeConfig.keepAliveDurationTimeUnit
+            )
         )
-        .connectTimeout(
-            timeout = botbyeConfig.connectionTimeout,
-            unit = TimeUnit.SECONDS,
-        )
+        .readTimeout(botbyeConfig.readTimeout)
+        .callTimeout(botbyeConfig.callTimeout)
+        .connectTimeout(botbyeConfig.connectionTimeout)
+        .writeTimeout(botbyeConfig.writeTimeout)
         .build()
 
     init {
