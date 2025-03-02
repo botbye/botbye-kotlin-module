@@ -40,6 +40,7 @@ class Botbye(
 
     private val client: OkHttpClient = OkHttpClient
         .Builder()
+        .retryOnConnectionFailure(false)
         .dispatcher(Dispatcher().apply {
             maxRequests = botbyeConfig.maxRequests
             maxRequestsPerHost = botbyeConfig.maxRequestsPerHost
