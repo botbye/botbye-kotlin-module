@@ -95,8 +95,8 @@ class Botbye(
             .post(
                 writer.writeValueAsString(body).toRequestBody(botbyeConfig.contentType),
             )
-            .header("Module-Name", botbyeConfig.moduleName)
-            .header("Module-Version", botbyeConfig.moduleVersion)
+            .header("Module-Name", BotbyeConfig.MODULE_NAME)
+            .header("Module-Version", BotbyeConfig.MODULE_VERSION)
             .build()
 
         val response = try {

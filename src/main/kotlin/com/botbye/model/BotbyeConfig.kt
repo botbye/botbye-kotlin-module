@@ -10,8 +10,6 @@ data class BotbyeConfig(
     var serverKey: String,
     var path: String = "/validate-request/v2",
     var contentType: MediaType = "application/json".toMediaType(),
-    val moduleVersion: String = "0.0.3",
-    val moduleName: String = "Kotlin",
     // client config
     val readTimeout: Duration = Duration.ofSeconds(2),
     val writeTimeout: Duration = Duration.ofSeconds(2),
@@ -24,4 +22,9 @@ data class BotbyeConfig(
     // dispatcher
     val maxRequestsPerHost: Int = 1500,
     val maxRequests: Int = 1500,
-)
+) {
+    companion object {
+        const val MODULE_NAME = "Kotlin"
+        const val MODULE_VERSION = "0.0.5"
+    }
+}
