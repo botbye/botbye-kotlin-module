@@ -1,4 +1,4 @@
-package com.botbye
+package com.botbye.service.mapper
 
 import com.fasterxml.jackson.core.JsonGenerator
 import com.fasterxml.jackson.databind.JsonSerializer

@@ -1,4 +1,4 @@
-package com.botbye.model
+package com.botbye.model.validator
 
 import com.fasterxml.jackson.annotation.JsonProperty
 

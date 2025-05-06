@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.botbye"
-version = "0.0.5-SNAPSHOT"
+version = "0.0.6-SNAPSHOT"
 
 repositories {
     mavenCentral()
@@ -15,6 +15,7 @@ repositories {
 dependencies {
     api("com.squareup.okhttp3:okhttp:4.12.0")
     api("com.fasterxml.jackson.core:jackson-databind:2.15.3")
+    api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.15.3")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 }
 

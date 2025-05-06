@@ -1,6 +1,6 @@
-package com.botbye.model
+package com.botbye.model.validator
 
-import com.botbye.Headers
+import com.botbye.service.mapper.Headers
 import com.fasterxml.jackson.annotation.JsonProperty
 
 data class BotbyeRequest(

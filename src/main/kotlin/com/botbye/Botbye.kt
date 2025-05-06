@@ -1,78 +1,37 @@
 package com.botbye
 
-import com.botbye.model.BotbyeConfig
-import com.botbye.model.BotbyeError
-import com.botbye.model.BotbyeRequest
-import com.botbye.model.BotbyeResponse
-import com.botbye.model.ConnectionDetails
+import com.botbye.model.ato.BotbyeAtoContext
+import com.botbye.model.ato.BotbyeAtoResponse
+import com.botbye.model.common.BotbyeConfig
+import com.botbye.model.common.BotbyeError
+import com.botbye.model.validator.BotbyeRequest
+import com.botbye.model.validator.BotbyeValidatorResponse
+import com.botbye.model.validator.ConnectionDetails
+import com.botbye.service.httpclient.OkHttpClientFactory
+import com.botbye.service.httpclient.OkHttpRestClient
+import com.botbye.service.httpclient.RestClient
+import com.botbye.service.mapper.Headers
+import com.botbye.service.mapper.ObjectMapperFactory
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.databind.ObjectReader
-import com.fasterxml.jackson.databind.ObjectWriter
-import com.fasterxml.jackson.databind.module.SimpleModule
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.ConnectionPool
-import okhttp3.Dispatcher
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import java.io.IOException
 import java.util.logging.ConsoleHandler
 import java.util.logging.Level
 import java.util.logging.Logger
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
-
-private val LOGGER = Logger.getLogger(Botbye::class.java.getName())
-private val mapper = ObjectMapper()
 
 class Botbye(
     private var botbyeConfig: BotbyeConfig,
+    private val client: RestClient = OkHttpRestClient(OkHttpClientFactory().createClient(botbyeConfig)),
+    private val mapper: ObjectMapper = ObjectMapperFactory().createObjectMapper()
 ) {
-
-    private val writer: ObjectWriter = mapper.registerModule(
-        SimpleModule().addSerializer(Headers::class.java, HeadersSerializer()),
-    ).writer()
-
-    private val reader: ObjectReader = mapper.reader()
-
-    private val client: OkHttpClient = OkHttpClient
-        .Builder()
-        .retryOnConnectionFailure(false)
-        .dispatcher(Dispatcher().apply {
-            maxRequests = botbyeConfig.maxRequests
-            maxRequestsPerHost = botbyeConfig.maxRequestsPerHost
-        })
-        .connectionPool(
-            ConnectionPool(
-                maxIdleConnections = botbyeConfig.maxIdleConnections,
-                keepAliveDuration = botbyeConfig.keepAliveDuration,
-                timeUnit = botbyeConfig.keepAliveDurationTimeUnit
-            )
-        )
-        .readTimeout(botbyeConfig.readTimeout)
-        .callTimeout(botbyeConfig.callTimeout)
-        .connectTimeout(botbyeConfig.connectionTimeout)
-        .writeTimeout(botbyeConfig.writeTimeout)
-        .build()
-
     init {
-        LOGGER.setLevel(Level.WARNING)
-        LOGGER.addHandler(ConsoleHandler())
+        if (botbyeConfig.serverKey.isBlank()) error("[BotBye] server key is not specified")
     }
 
-    private fun handleResponse(response: Response): BotbyeResponse {
-        val responseBody = response.body
-            ?.use { it.string() }
-            ?: return BotbyeResponse()
-
-        return reader.readValue(responseBody, BotbyeResponse::class.java)
-    }
-
-    fun setConf(config: BotbyeConfig) {
-        botbyeConfig = config
+    private val logger: Logger = Logger.getLogger(Botbye::class.java.getName()).apply {
+        level = Level.WARNING
+        addHandler(ConsoleHandler())
     }
 
     suspend fun validateRequest(
@@ -80,51 +39,67 @@ class Botbye(
         connectionDetails: ConnectionDetails,
         headers: Headers,
         customFields: Map<String, String> = emptyMap(),
-    ): BotbyeResponse {
-        if (botbyeConfig.serverKey.isBlank()) error("[BotBye] server key is not specified")
-
-        val body = BotbyeRequest(
-            serverKey = botbyeConfig.serverKey,
-            headers = headers,
-            requestInfo = connectionDetails,
-            customFields = customFields,
+    ): BotbyeValidatorResponse {
+        val request = buildRequest(
+            url = "${botbyeConfig.botbyeEndpoint}/validate-request/v2?${token.orEmpty()}",
+            body = BotbyeRequest(
+                serverKey = botbyeConfig.serverKey,
+                headers = headers,
+                requestInfo = connectionDetails,
+                customFields = customFields,
+            )
         )
 
-        val request = Request.Builder()
-            .url("${botbyeConfig.botbyeEndpoint}${botbyeConfig.path}?${token ?: ""}")
-            .post(
-                writer.writeValueAsString(body).toRequestBody(botbyeConfig.contentType),
-            )
-            .header("Module-Name", BotbyeConfig.MODULE_NAME)
-            .header("Module-Version", BotbyeConfig.MODULE_VERSION)
-            .build()
-
-        val response = try {
-            handleResponse(
-                response = client.sendRequest(request),
-            )
+        return try {
+            handleResponse(response = client.sendRequest(request)) ?: BotbyeValidatorResponse()
         } catch (e: Exception) {
-            LOGGER.warning("[BotBye] exception occurred: ${e.message}")
-
-            BotbyeResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
+            logger.warning("[BotBye] exception occurred: ${e.message}")
+            BotbyeValidatorResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
         }
-
-        return response
     }
-}
 
-suspend fun OkHttpClient.sendRequest(request: Request): Response {
-    return suspendCoroutine { continuation ->
-        newCall(request).enqueue(
-            object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    continuation.resumeWithException(e)
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    continuation.resume(response)
-                }
-            },
+    suspend fun analyze(
+        token: String?,
+        atoContext: BotbyeAtoContext,
+    ): BotbyeAtoResponse {
+        val request = buildRequest(
+            url = "${botbyeConfig.botbyeEndpoint}/analyze-context/v1?${token.orEmpty()}",
+            body = atoContext
         )
+
+        return try {
+            handleResponse(response = client.sendRequest(request)) ?: BotbyeAtoResponse()
+        } catch (e: Exception) {
+            logger.warning("[BotBye] exception occurred: ${e.message}")
+            BotbyeAtoResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
+        }
+    }
+
+    fun setConf(config: BotbyeConfig) {
+        botbyeConfig = config
+    }
+
+    private fun <T> buildRequest(url: String, body: T): Request {
+        return Request.Builder()
+            .url(url)
+            .post(mapper.writeValueAsString(body).toRequestBody(botbyeConfig.contentType))
+            .apply {
+                addCommonHeaders()
+            }
+            .build()
+    }
+
+    private fun Request.Builder.addCommonHeaders() {
+        addHeader("Module-Name", BotbyeConfig.MODULE_NAME)
+        addHeader("Module-Version", BotbyeConfig.MODULE_VERSION)
+        addHeader("X-Botbye-Server-Key", botbyeConfig.serverKey)
+    }
+
+    private inline fun <reified T> handleResponse(response: Response): T? {
+        val responseBody = response.body
+            ?.use { it.string() }
+            ?: return null
+
+        return mapper.readValue(responseBody, T::class.java)
     }
 }
