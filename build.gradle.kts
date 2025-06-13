@@ -1,15 +1,24 @@
+import org.jreleaser.model.Active
+
 plugins {
     `maven-publish`
     signing
+    id("java-library")
+    id("java")
     kotlin("jvm") version "1.9.20"
-    id("io.codearte.nexus-staging") version "0.30.0"
+    id("org.jreleaser") version "1.18.0"
 }
 
 group = "com.botbye"
-version = "0.0.6-SNAPSHOT"
+version = "0.0.1"
 
 repositories {
     mavenCentral()
+}
+
+java {
+    withSourcesJar()
+    withJavadocJar()
 }
 
 dependencies {
@@ -19,31 +28,16 @@ dependencies {
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 }
 
-tasks {
-    register<Javadoc>("withJavadoc")
-
-    register<Jar>("withJavadocJar") {
-        archiveClassifier.set("javadoc")
-        dependsOn(named("withJavadoc"))
-        val destination = named<Javadoc>("withJavadoc").get().destinationDir
-        from(destination)
-    }
-
-    register<Jar>("withSourcesJar") {
-        archiveClassifier.set("sources")
-        from(project.sourceSets.getByName("main").java.srcDirs)
-    }
-}
-
 publishing {
     publications {
         create<MavenPublication>("mavenKotlin") {
             artifactId = "kotlin-module"
-            from(components["kotlin"])
+            from(components["java"])
+
             pom {
                 packaging = "jar"
                 name.set("BotBye Kotlin module")
-                url.set("https://github.com/botbye/botbye-kotlin-module")
+                url.set("https://github.com/botbye/${project.rootProject.name}")
                 description.set("Kotlin module for integration with botbye.com")
 
                 licenses {
@@ -54,43 +48,60 @@ publishing {
                 }
 
                 scm {
-                    connection.set("scm:https://github.com/botbye/botbye-kotlin-module.git")
-                    developerConnection.set("scm:git@github.com:botbye/botbye-kotlin-module.git")
-                    url.set("https://botbye.com/")
+                    connection.set("scm:https://github.com/botbye/${project.rootProject.name}.git")
+                    developerConnection.set("scm:git@github.com:botbye/${project.rootProject.name}")
+                    url.set("https://github.com/botbye/${project.rootProject.name}")
                 }
 
                 developers {
                     developer {
                         id.set("BotBye")
                         name.set("BotBye")
-                        email.set("https://botbye.com/")
+                        email.set("accounts@botbye.com")
                     }
                 }
             }
-
-            artifact(tasks.named<Jar>("withJavadocJar"))
-            artifact(tasks.named<Jar>("withSourcesJar"))
         }
     }
     repositories {
         maven {
-            val releasesUrl = uri("https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/")
-            val snapshotsUrl = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
-            url = if (project.version.toString().endsWith("SNAPSHOT")) snapshotsUrl else releasesUrl
-            credentials {
-                username = project.properties["ossrhUsername"].toString()
-                password = project.properties["ossrhPassword"].toString()
-            }
+            setUrl(layout.buildDirectory.dir("staging-deploy"))
         }
     }
 }
 
-signing {
-    sign(publishing.publications["mavenKotlin"])
-}
+jreleaser {
+    release {
+        github {
+            name = "botbye-kotlin-module"
+            token = "env:GITHUB_TOKEN"
+        }
+    }
 
-nexusStaging {
-    serverUrl = "https://s01.oss.sonatype.org/service/local/"
-    username = project.properties["ossrhUsername"].toString()
-    password = project.properties["ossrhPassword"].toString()
+    signing {
+        active = Active.ALWAYS
+        armored = true
+        verify = true
+    }
+
+    project {
+        inceptionYear = "2023"
+        author("@botbye")
+    }
+
+    deploy {
+        maven {
+            mavenCentral.create("sonatype") {
+                active = Active.ALWAYS
+                url = "https://central.sonatype.com/api/v1/publisher"
+                stagingRepository(layout.buildDirectory.dir("staging-deploy").get().toString())
+                setAuthorization("Basic")
+                retryDelay = 60
+                sign = true
+                checksums = true
+                sourceJar = true
+                javadocJar = true
+            }
+        }
+    }
 }
