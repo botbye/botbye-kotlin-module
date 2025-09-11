@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class BotbyeAtoResult(
     val decision: Decision = Decision.ALLOW,
+    val reason: String? = null,
 ){
     enum class Decision {
         ALLOW,
