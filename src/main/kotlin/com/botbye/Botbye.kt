@@ -4,6 +4,8 @@ import com.botbye.model.ato.BotbyeAtoContext
 import com.botbye.model.ato.BotbyeAtoResponse
 import com.botbye.model.common.BotbyeConfig
 import com.botbye.model.common.BotbyeError
+import com.botbye.model.init.InitErrorResponse
+import com.botbye.model.init.InitRequest
 import com.botbye.model.validator.BotbyeRequest
 import com.botbye.model.validator.BotbyeValidatorResponse
 import com.botbye.model.validator.ConnectionDetails
@@ -13,6 +15,7 @@ import com.botbye.service.httpclient.RestClient
 import com.botbye.service.mapper.Headers
 import com.botbye.service.mapper.ObjectMapperFactory
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.runBlocking
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -25,13 +28,18 @@ class Botbye(
     private val client: RestClient = OkHttpRestClient(OkHttpClientFactory().createClient(botbyeConfig)),
     private val mapper: ObjectMapper = ObjectMapperFactory().createObjectMapper()
 ) {
-    init {
-        if (botbyeConfig.serverKey.isBlank()) error("[BotBye] server key is not specified")
-    }
 
     private val logger: Logger = Logger.getLogger(Botbye::class.java.getName()).apply {
         level = Level.WARNING
         addHandler(ConsoleHandler())
+    }
+
+    init {
+        if (botbyeConfig.serverKey.isBlank()) error("[BotBye] server key is not specified")
+
+        runBlocking {
+            initRequest()
+        }
     }
 
     suspend fun validateRequest(
@@ -72,6 +80,23 @@ class Botbye(
         } catch (e: Exception) {
             logger.warning("[BotBye] exception occurred: ${e.message}")
             BotbyeAtoResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
+        }
+    }
+
+    private suspend fun initRequest() {
+        val request = buildRequest(
+            url = "${botbyeConfig.botbyeEndpoint.trimEnd('/')}/init-request/v1",
+            body = InitRequest(botbyeConfig.serverKey)
+        )
+
+        try {
+            val response = handleResponse<InitErrorResponse>(client.sendRequest(request))
+
+            if (response?.error != null || response?.status != "ok") {
+                logger.warning("[BotBye] init-request error = ${response?.error}; status = ${response?.status}")
+            }
+        } catch (e: Exception) {
+            logger.warning("[BotBye] exception occurred: ${e.message}")
         }
     }
 
