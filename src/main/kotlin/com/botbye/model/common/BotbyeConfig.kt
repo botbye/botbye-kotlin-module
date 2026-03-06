@@ -22,6 +22,10 @@ data class BotbyeConfig(
     val maxRequestsPerHost: Int = 1500,
     val maxRequests: Int = 1500,
 ) {
+    init {
+        require(serverKey.isNotBlank()) { "[BotBye] server key is not specified" }
+    }
+
     companion object {
         const val MODULE_NAME = "Kotlin"
         const val MODULE_VERSION = "0.0.6"
