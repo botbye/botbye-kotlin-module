@@ -24,6 +24,7 @@ data class BotbyeConfig(
 ) {
     init {
         require(serverKey.isNotBlank()) { "[BotBye] server key is not specified" }
+        botbyeEndpoint = normalizeBaseUrl(botbyeEndpoint)
     }
 
     companion object {
@@ -31,3 +32,5 @@ data class BotbyeConfig(
         const val MODULE_VERSION = "0.0.7"
     }
 }
+
+fun normalizeBaseUrl(url: String): String = url.trimEnd('/')

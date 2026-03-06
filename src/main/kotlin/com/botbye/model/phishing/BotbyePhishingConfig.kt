@@ -1,5 +1,7 @@
 package com.botbye.model.phishing
 
+import com.botbye.model.common.normalizeBaseUrl
+
 data class BotbyePhishingConfig(
     var endpoint: String = "",
     var accountId: String = "",
@@ -14,7 +16,5 @@ data class BotbyePhishingConfig(
         require(apiKey.isNotBlank()) { "[BotBye] phishing apiKey is not specified" }
         endpoint = normalizeBaseUrl(endpoint)
     }
-
-    private fun normalizeBaseUrl(url: String): String = url.trimEnd('/')
 }
 
