@@ -110,7 +110,7 @@ class Botbye(
     }
 
     suspend fun fetchImage(origin: String?, imageId: String? = null): BotbyePhishingResponse {
-        val conf = botbyePhishingConfig.requireConfigured()
+        val conf = requireNotNull(botbyePhishingConfig) { "[BotBye] phishing is not configured" }
 
         val baseUrl = "${conf.endpoint}/api/v1/phishing/${conf.accountId}/projects/${conf.projectId}/image"
             .toHttpUrlOrNull()
