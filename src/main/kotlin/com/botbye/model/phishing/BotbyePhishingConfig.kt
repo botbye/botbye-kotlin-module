@@ -7,10 +7,11 @@ data class BotbyePhishingConfig(
     var accountId: String = "",
     var projectId: String = "",
     var apiKey: String = "",
-    val connectionTimeout: Duration = Duration.ofSeconds(2),
-    val readTimeout: Duration = Duration.ofSeconds(3),
-    val callTimeout: Duration = Duration.ofSeconds(5),
 ) {
+
+    init {
+        endpoint = normalizeBaseUrl(endpoint)
+    }
 
     fun requireConfigured(): BotbyePhishingConfig {
         require(endpoint.isNotBlank()) { "[BotBye] phishing endpoint is not specified" }
@@ -19,5 +20,8 @@ data class BotbyePhishingConfig(
         require(apiKey.isNotBlank()) { "[BotBye] phishing apiKey is not specified" }
         return this
     }
+
+    private fun normalizeBaseUrl(url: String): String = url.trimEnd('/')
+
 }
 

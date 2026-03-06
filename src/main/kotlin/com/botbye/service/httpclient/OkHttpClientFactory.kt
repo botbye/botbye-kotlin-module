@@ -1,7 +1,6 @@
 package com.botbye.service.httpclient
 
 import com.botbye.model.common.BotbyeConfig
-import com.botbye.model.phishing.BotbyePhishingConfig
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
@@ -25,12 +24,4 @@ class OkHttpClientFactory {
         .connectTimeout(config.connectionTimeout)
         .writeTimeout(config.writeTimeout)
         .build()
-
-    fun createClient(botbyeConfig: BotbyeConfig, botbyePhishingConfig: BotbyePhishingConfig): OkHttpClient =
-        createClient(botbyeConfig)
-            .newBuilder()
-            .connectTimeout(botbyePhishingConfig.connectionTimeout)
-            .readTimeout(botbyePhishingConfig.readTimeout)
-            .callTimeout(botbyePhishingConfig.callTimeout)
-            .build()
 }
