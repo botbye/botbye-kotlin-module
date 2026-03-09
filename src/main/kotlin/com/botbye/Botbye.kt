@@ -101,6 +101,23 @@ class Botbye(
         }
     }
 
+    suspend fun track(
+        token: String?,
+        atoContext: BotbyeAtoContext,
+    ): BotbyeAtoResponse {
+        val request = buildRequest(
+            url = "${botbyeConfig.botbyeEndpoint}/track-event/v1?${token.orEmpty()}",
+            body = atoContext
+        )
+
+        return try {
+            handleResponse(response = client.sendRequest(request)) ?: BotbyeAtoResponse()
+        } catch (e: Exception) {
+            logger.warning("[BotBye] exception occurred: ${e.message}")
+            BotbyeAtoResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
+        }
+    }
+
     fun setConf(config: BotbyeConfig) {
         botbyeConfig = config
     }

@@ -10,7 +10,7 @@ import java.time.Instant
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class BotbyeAtoContext(
-    val userInfo: BotbyeUserInfo,
+    val userInfo: BotbyeUserInfo? = null,
     val remoteAddr: String,
     val headers: Headers,
     val eventType: EventType,
