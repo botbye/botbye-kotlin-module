@@ -22,9 +22,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import java.util.logging.ConsoleHandler
-import java.util.logging.Level
-import java.util.logging.Logger
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 class Botbye(
     private var botbyeConfig: BotbyeConfig,
@@ -32,10 +31,7 @@ class Botbye(
     private val client: RestClient = OkHttpRestClient(OkHttpClientFactory().createClient(botbyeConfig)),
     private val mapper: ObjectMapper = ObjectMapperFactory().createObjectMapper()
 ) {
-    private val logger: Logger = Logger.getLogger(Botbye::class.java.getName()).apply {
-        level = Level.WARNING
-        addHandler(ConsoleHandler())
-    }
+    private val logger: Logger = LoggerFactory.getLogger(Botbye::class.java)
 
     init {
         runBlocking {
@@ -62,7 +58,7 @@ class Botbye(
         return try {
             handleResponse(response = client.sendRequest(request)) ?: BotbyeValidatorResponse()
         } catch (e: Exception) {
-            logger.warning("[BotBye] exception occurred: ${e.message}")
+            logger.warn("[BotBye] exception occurred: {}", e.message, e)
             BotbyeValidatorResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
         }
     }
@@ -79,7 +75,7 @@ class Botbye(
         return try {
             handleResponse(response = client.sendRequest(request)) ?: BotbyeAtoResponse()
         } catch (e: Exception) {
-            logger.warning("[BotBye] exception occurred: ${e.message}")
+            logger.warn("[BotBye] exception occurred: {}", e.message, e)
             BotbyeAtoResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
         }
     }
@@ -94,10 +90,10 @@ class Botbye(
             val response = handleResponse<InitErrorResponse>(client.sendRequest(request))
 
             if (response?.error != null || response?.status != "ok") {
-                logger.warning("[BotBye] init-request error = ${response?.error}; status = ${response?.status}")
+                logger.warn("[BotBye] init-request error = {}; status = {}", response?.error, response?.status)
             }
         } catch (e: Exception) {
-            logger.warning("[BotBye] exception occurred: ${e.message}")
+            logger.warn("[BotBye] exception occurred: {}", e.message, e)
         }
     }
 
@@ -113,7 +109,7 @@ class Botbye(
         return try {
             handleResponse(response = client.sendRequest(request)) ?: BotbyeAtoResponse()
         } catch (e: Exception) {
-            logger.warning("[BotBye] exception occurred: ${e.message}")
+            logger.warn("[BotBye] exception occurred: {}", e.message, e)
             BotbyeAtoResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
         }
     }
@@ -160,7 +156,7 @@ class Botbye(
                 )
             }
         } catch (e: Exception) {
-            logger.warning("[BotBye] phishing image exception occurred: ${e.message}")
+            logger.warn("[BotBye] phishing image exception occurred: {}", e.message, e)
             BotbyePhishingResponse(error = BotbyeError(e.message ?: "[BotBye] failed to fetch phishing image"))
         }
     }
