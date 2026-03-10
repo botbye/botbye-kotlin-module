@@ -3,7 +3,7 @@ package com.botbye.model.phishing
 import com.botbye.model.common.normalizeBaseUrl
 
 data class BotbyePhishingConfig(
-    var endpoint: String = "",
+    var endpoint: String = "https://verify.botbye.com",
     var accountId: String = "",
     var projectId: String = "",
     var apiKey: String = "",
