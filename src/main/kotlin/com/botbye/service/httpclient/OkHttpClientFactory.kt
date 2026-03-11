@@ -4,6 +4,7 @@ import com.botbye.model.common.BotbyeConfig
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 class OkHttpClientFactory {
     fun createClient(config: BotbyeConfig): OkHttpClient = OkHttpClient.Builder()
@@ -15,8 +16,8 @@ class OkHttpClientFactory {
         .connectionPool(
             ConnectionPool(
                 maxIdleConnections = config.maxIdleConnections,
-                keepAliveDuration = config.keepAliveDuration,
-                timeUnit = config.keepAliveDurationTimeUnit
+                keepAliveDuration = config.keepAliveDuration.toMillis(),
+                timeUnit = TimeUnit.MILLISECONDS
             )
         )
         .readTimeout(config.readTimeout)
