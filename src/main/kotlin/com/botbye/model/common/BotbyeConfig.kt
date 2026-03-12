@@ -3,7 +3,6 @@ package com.botbye.model.common
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import java.time.Duration
-import java.util.concurrent.TimeUnit
 
 data class BotbyeConfig(
     var botbyeEndpoint: String = "https://verify.botbye.com",
@@ -16,8 +15,7 @@ data class BotbyeConfig(
     val callTimeout: Duration = Duration.ofSeconds(5),
     // pool config
     val maxIdleConnections: Int = 250,
-    val keepAliveDuration: Long = 5,
-    val keepAliveDurationTimeUnit: TimeUnit = TimeUnit.MINUTES,
+    val keepAliveDuration: Duration = Duration.ofSeconds(300),
     // dispatcher
     val maxRequestsPerHost: Int = 1500,
     val maxRequests: Int = 1500,
@@ -29,7 +27,7 @@ data class BotbyeConfig(
 
     companion object {
         const val MODULE_NAME = "Kotlin"
-        const val MODULE_VERSION = "0.0.8"
+        const val MODULE_VERSION = "0.0.9"
     }
 }
 
