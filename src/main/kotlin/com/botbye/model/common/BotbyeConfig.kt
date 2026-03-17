@@ -27,7 +27,7 @@ data class BotbyeConfig(
 
     companion object {
         const val MODULE_NAME = "Kotlin"
-        const val MODULE_VERSION = "0.0.9"
+        const val MODULE_VERSION = "1.0.1"
     }
 }
 

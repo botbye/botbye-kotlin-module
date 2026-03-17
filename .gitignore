@@ -18,6 +18,7 @@ Thumbs.db
 .fleet/
 /.idea/
 *.iml
+/out/
 
 id_resolver.json
 live_feed_store.json

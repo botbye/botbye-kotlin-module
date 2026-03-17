@@ -1,23 +1,23 @@
 package com.botbye
 
-import com.botbye.model.ato.BotbyeAtoContext
-import com.botbye.model.ato.BotbyeAtoResponse
 import com.botbye.model.common.BotbyeConfig
 import com.botbye.model.common.BotbyeError
 import com.botbye.model.init.InitErrorResponse
 import com.botbye.model.init.InitRequest
 import com.botbye.model.phishing.BotbyePhishingConfig
 import com.botbye.model.phishing.BotbyePhishingResponse
-import com.botbye.model.validator.BotbyeRequest
-import com.botbye.model.validator.BotbyeValidatorResponse
-import com.botbye.model.validator.ConnectionDetails
+import com.botbye.model.evaluate.BotbyeEvaluateRequest
+import com.botbye.model.evaluate.BotbyeEvaluateResponse
 import com.botbye.service.httpclient.OkHttpClientFactory
 import com.botbye.service.httpclient.OkHttpRestClient
 import com.botbye.service.httpclient.RestClient
-import com.botbye.service.mapper.Headers
 import com.botbye.service.mapper.ObjectMapperFactory
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.ObjectWriter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -29,9 +29,12 @@ class Botbye(
     private var botbyeConfig: BotbyeConfig,
     private var botbyePhishingConfig: BotbyePhishingConfig? = null,
     private val client: RestClient = OkHttpRestClient(OkHttpClientFactory().createClient(botbyeConfig)),
-    private val mapper: ObjectMapper = ObjectMapperFactory().createObjectMapper()
+    private val mapper: ObjectMapper = ObjectMapperFactory().createObjectMapper(),
 ) {
     private val logger: Logger = LoggerFactory.getLogger(Botbye::class.java)
+    private var evaluateBaseUrl: String = "${botbyeConfig.botbyeEndpoint}/api/v1/protect/evaluate"
+    private var evaluateWriter: ObjectWriter = buildEvaluateWriter(botbyeConfig.serverKey)
+    private var phishingBaseUrl: HttpUrl? = botbyePhishingConfig?.let { buildPhishingBaseUrl(it) }
 
     init {
         runBlocking {
@@ -39,51 +42,14 @@ class Botbye(
         }
     }
 
-    suspend fun validateRequest(
-        token: String?,
-        connectionDetails: ConnectionDetails,
-        headers: Headers,
-        customFields: Map<String, String> = emptyMap(),
-    ): BotbyeValidatorResponse {
-        val request = buildRequest(
-            url = "${botbyeConfig.botbyeEndpoint}/validate-request/v2?${token.orEmpty()}",
-            body = BotbyeRequest(
-                serverKey = botbyeConfig.serverKey,
-                headers = headers,
-                requestInfo = connectionDetails,
-                customFields = customFields,
-            )
-        )
-
-        return try {
-            handleResponse(response = client.sendRequest(request)) ?: BotbyeValidatorResponse()
-        } catch (e: Exception) {
-            logger.warn("[BotBye] exception occurred: {}", e.message, e)
-            BotbyeValidatorResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
-        }
-    }
-
-    suspend fun analyze(
-        token: String?,
-        atoContext: BotbyeAtoContext,
-    ): BotbyeAtoResponse {
-        val request = buildRequest(
-            url = "${botbyeConfig.botbyeEndpoint}/analyze-context/v1?${token.orEmpty()}",
-            body = atoContext
-        )
-
-        return try {
-            handleResponse(response = client.sendRequest(request)) ?: BotbyeAtoResponse()
-        } catch (e: Exception) {
-            logger.warn("[BotBye] exception occurred: {}", e.message, e)
-            BotbyeAtoResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
-        }
-    }
+    private fun buildEvaluateWriter(serverKey: String): ObjectWriter =
+        mapper.writerFor(BotbyeEvaluateRequest::class.java)
+            .withAttribute("server_key", serverKey)
 
     private suspend fun initRequest() {
         val request = buildRequest(
             url = "${botbyeConfig.botbyeEndpoint.trimEnd('/')}/init-request/v1",
-            body = InitRequest(botbyeConfig.serverKey)
+            body = InitRequest(botbyeConfig.serverKey),
         )
 
         try {
@@ -97,36 +63,40 @@ class Botbye(
         }
     }
 
-    suspend fun track(
-        token: String?,
-        atoContext: BotbyeAtoContext,
-    ): BotbyeAtoResponse {
-        val request = buildRequest(
-            url = "${botbyeConfig.botbyeEndpoint}/track-event/v1?${token.orEmpty()}",
-            body = atoContext
+    suspend fun evaluate(request: BotbyeEvaluateRequest): BotbyeEvaluateResponse {
+        val tokenQuery = request.request.token?.let { "?$it" } ?: ""
+        val httpRequest = buildEvaluateHttpRequest(
+            url = "$evaluateBaseUrl$tokenQuery",
+            request = request,
         )
 
         return try {
-            handleResponse(response = client.sendRequest(request)) ?: BotbyeAtoResponse()
+            handleResponse(response = client.sendRequest(httpRequest)) ?: BotbyeEvaluateResponse()
         } catch (e: Exception) {
             logger.warn("[BotBye] exception occurred: {}", e.message, e)
-            BotbyeAtoResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
+            BotbyeEvaluateResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
         }
     }
 
     fun setConf(config: BotbyeConfig) {
         botbyeConfig = config
+        evaluateBaseUrl = "${config.botbyeEndpoint}/api/v1/protect/evaluate"
+        evaluateWriter = buildEvaluateWriter(config.serverKey)
     }
 
     fun setPhishingConf(config: BotbyePhishingConfig) {
         botbyePhishingConfig = config.copy()
+        phishingBaseUrl = buildPhishingBaseUrl(config)
     }
+
+    private fun buildPhishingBaseUrl(conf: BotbyePhishingConfig): HttpUrl? =
+        "${conf.endpoint}/api/v1/phishing/${conf.accountId}/projects/${conf.projectId}/image"
+            .toHttpUrlOrNull()
 
     suspend fun fetchImage(origin: String?, imageId: String? = null): BotbyePhishingResponse {
         val conf = requireNotNull(botbyePhishingConfig) { "[BotBye] phishing is not configured" }
 
-        val baseUrl = "${conf.endpoint}/api/v1/phishing/${conf.accountId}/projects/${conf.projectId}/image"
-            .toHttpUrlOrNull()
+        val baseUrl = phishingBaseUrl
             ?: return BotbyePhishingResponse(error = BotbyeError("[BotBye] invalid phishing endpoint url"))
 
         val url = if (imageId.isNullOrBlank()) {
@@ -148,12 +118,20 @@ class Botbye(
             .build()
 
         return try {
-            client.sendRequest(request).use { response ->
-                BotbyePhishingResponse(
-                    status = response.code,
-                    headers = response.headers.names().associateWith { response.header(it).orEmpty() },
-                    body = response.body?.bytes() ?: byteArrayOf(),
-                )
+            withContext(Dispatchers.IO) {
+                client.sendRequest(request).use { response ->
+                    val responseHeaders = buildMap(response.headers.size) {
+                        for (i in 0 until response.headers.size) {
+                            put(response.headers.name(i), response.headers.value(i))
+                        }
+                    }
+
+                    BotbyePhishingResponse(
+                        status = response.code,
+                        headers = responseHeaders,
+                        body = response.body?.bytes() ?: byteArrayOf(),
+                    )
+                }
             }
         } catch (e: Exception) {
             logger.warn("[BotBye] phishing image exception occurred: {}", e.message, e)
@@ -161,27 +139,43 @@ class Botbye(
         }
     }
 
+    private fun buildEvaluateHttpRequest(url: String, request: BotbyeEvaluateRequest): Request {
+        val body = evaluateWriter.writeValueAsBytes(request)
+            .toRequestBody(botbyeConfig.contentType)
+
+        return Request.Builder()
+            .url(url)
+            .post(body)
+            .apply { addCommonHeaders() }
+            .build()
+    }
+
     private fun <T> buildRequest(url: String, body: T): Request {
         return Request.Builder()
             .url(url)
-            .post(mapper.writeValueAsString(body).toRequestBody(botbyeConfig.contentType))
-            .apply {
-                addCommonHeaders()
-            }
+            .post(mapper.writeValueAsBytes(body).toRequestBody(botbyeConfig.contentType))
+            .apply { addCommonHeaders() }
             .build()
     }
 
     private fun Request.Builder.addCommonHeaders() {
         addHeader("Module-Name", BotbyeConfig.MODULE_NAME)
         addHeader("Module-Version", BotbyeConfig.MODULE_VERSION)
-        addHeader("X-Botbye-Server-Key", botbyeConfig.serverKey)
     }
 
-    private inline fun <reified T> handleResponse(response: Response): T? {
-        val responseBody = response.body
-            ?.use { it.string() }
-            ?: return null
+    private suspend inline fun <reified T> handleResponse(response: Response): T? {
+        val body = response.body ?: run {
+            response.close()
 
-        return mapper.readValue(responseBody, T::class.java)
+            return null
+        }
+
+        return withContext(Dispatchers.IO) {
+            response.use {
+                val responseBody = body.string()
+
+                mapper.readValue(responseBody, T::class.java)
+            }
+        }
     }
 }

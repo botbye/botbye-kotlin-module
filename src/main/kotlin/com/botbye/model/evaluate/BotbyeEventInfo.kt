@@ -1,12 +1,10 @@
-package com.botbye.model.ato
+package com.botbye.model.evaluate
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
 import com.fasterxml.jackson.databind.annotation.JsonNaming
 
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class BotbyeUserInfo(
-    val accountId: String,
-    val username: String? = null,
-    val email: String? = null,
-    val phone: String? = null,
+data class BotbyeEventInfo(
+    val type: String,
+    val status: BotbyeEventStatus,
 )
