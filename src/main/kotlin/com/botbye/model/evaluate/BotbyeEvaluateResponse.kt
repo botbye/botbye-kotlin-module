@@ -2,6 +2,7 @@ package com.botbye.model.evaluate
 
 import com.botbye.model.common.BotbyeError
 import com.botbye.model.common.BotbyeExtraData
+import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
@@ -21,7 +22,9 @@ data class BotbyeEvaluateResponse(
     val challenge: BotbyeChallenge? = null,
     @field:JsonInclude(JsonInclude.Include.NON_NULL)
     val extraData: BotbyeExtraData? = null,
+    @field:JsonInclude(JsonInclude.Include.NON_NULL)
     val error: BotbyeError? = null,
 ) {
+    @get:JsonIgnore
     val isBlocked: Boolean get() = decision == BotbyeDecision.BLOCK
 }

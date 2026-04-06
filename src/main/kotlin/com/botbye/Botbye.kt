@@ -1,20 +1,22 @@
 package com.botbye
 
+import com.botbye.Botbye.Companion.RESULT_HEADER
 import com.botbye.model.common.BotbyeConfig
 import com.botbye.model.common.BotbyeError
+import com.botbye.model.evaluate.BotbyeEvaluateConfig
+import com.botbye.model.evaluate.BotbyeEvaluateResponse
+import com.botbye.model.evaluate.BotbyeEvent
 import com.botbye.model.init.InitErrorResponse
 import com.botbye.model.init.InitRequest
 import com.botbye.model.phishing.BotbyePhishingConfig
 import com.botbye.model.phishing.BotbyePhishingResponse
-import com.botbye.model.evaluate.BotbyeEvaluateConfig
-import com.botbye.model.evaluate.BotbyeEvaluateRequest
-import com.botbye.model.evaluate.BotbyeEvaluateResponse
 import com.botbye.service.httpclient.OkHttpClientFactory
 import com.botbye.service.httpclient.OkHttpRestClient
 import com.botbye.service.httpclient.RestClient
 import com.botbye.service.mapper.ObjectMapperFactory
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.ObjectWriter
+import java.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -34,19 +36,22 @@ class Botbye(
 ) {
     private val logger: Logger = LoggerFactory.getLogger(Botbye::class.java)
     private var evaluateBaseUrl: String = "${botbyeConfig.botbyeEndpoint}/api/v1/protect/evaluate"
-    private var evaluateWriter: ObjectWriter = buildEvaluateWriter(botbyeConfig.serverKey)
     private var phishingBaseUrl: HttpUrl? = botbyePhishingConfig?.let { buildPhishingBaseUrl(it) }
-    private val bypassConfig = BotbyeEvaluateConfig(bypassBotValidation = true)
+    private val bypassResultBase64: String = Base64.getEncoder().encodeToString(
+        mapper.writeValueAsBytes(BotbyeEvaluateResponse(config = bypassConfig)),
+    )
+
+    companion object {
+        const val RESULT_HEADER = "X-Botbye-Result"
+
+        private val bypassConfig = BotbyeEvaluateConfig(bypassBotValidation = true)
+    }
 
     init {
         runBlocking {
             initRequest()
         }
     }
-
-    private fun buildEvaluateWriter(serverKey: String): ObjectWriter =
-        mapper.writerFor(BotbyeEvaluateRequest::class.java)
-            .withAttribute("server_key", serverKey)
 
     private suspend fun initRequest() {
         val request = buildRequest(
@@ -65,10 +70,12 @@ class Botbye(
         }
     }
 
-    suspend fun evaluate(request: BotbyeEvaluateRequest): BotbyeEvaluateResponse {
-        val tokenQuery = request.request.token?.let { "?$it" } ?: ""
+    suspend fun evaluate(request: BotbyeEvent): BotbyeEvaluateResponse {
+        val tokenQuery = request.urlToken?.let { "?$it" } ?: ""
+        val writer = mapper.writerFor(request::class.java).withAttribute("server_key", botbyeConfig.serverKey)
         val httpRequest = buildEvaluateHttpRequest(
             url = "$evaluateBaseUrl$tokenQuery",
+            writer = writer,
             request = request,
         )
 
@@ -83,10 +90,24 @@ class Botbye(
         }
     }
 
+    /**
+     * Encodes evaluate response as base64 JSON for propagation
+     * to Level 2 via [RESULT_HEADER].
+     * Mirrors openresty `M.encodeResult()`.
+     */
+    fun encodeResult(response: BotbyeEvaluateResponse): String =
+        Base64.getEncoder().encodeToString(mapper.writeValueAsBytes(response))
+
+    /**
+     * Returns pre-computed bypass result (base64 JSON with `bypass_bot_validation = true`).
+     * Use when request should not be validated (excluded URI, service token, etc).
+     * Mirrors openresty `M.propagateBypass()`.
+     */
+    fun bypassResult(): String = bypassResultBase64
+
     fun setConf(config: BotbyeConfig) {
         botbyeConfig = config
         evaluateBaseUrl = "${config.botbyeEndpoint}/api/v1/protect/evaluate"
-        evaluateWriter = buildEvaluateWriter(config.serverKey)
     }
 
     fun setPhishingConf(config: BotbyePhishingConfig) {
@@ -144,8 +165,8 @@ class Botbye(
         }
     }
 
-    private fun buildEvaluateHttpRequest(url: String, request: BotbyeEvaluateRequest): Request {
-        val body = evaluateWriter.writeValueAsBytes(request)
+    private fun buildEvaluateHttpRequest(url: String, writer: ObjectWriter, request: BotbyeEvent): Request {
+        val body = writer.writeValueAsBytes(request)
             .toRequestBody(botbyeConfig.contentType)
 
         return Request.Builder()
