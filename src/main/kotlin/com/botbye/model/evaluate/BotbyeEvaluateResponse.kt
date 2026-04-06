@@ -16,6 +16,7 @@ data class BotbyeEvaluateResponse(
     val riskScore: Double = 0.0,
     val signals: List<String> = emptyList(),
     val scores: Map<String, Double> = emptyMap(),
+    val config: BotbyeEvaluateConfig = BotbyeEvaluateConfig(),
     @field:JsonInclude(JsonInclude.Include.NON_NULL)
     val challenge: BotbyeChallenge? = null,
     @field:JsonInclude(JsonInclude.Include.NON_NULL)

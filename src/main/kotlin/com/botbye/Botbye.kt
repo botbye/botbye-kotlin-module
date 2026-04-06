@@ -6,6 +6,7 @@ import com.botbye.model.init.InitErrorResponse
 import com.botbye.model.init.InitRequest
 import com.botbye.model.phishing.BotbyePhishingConfig
 import com.botbye.model.phishing.BotbyePhishingResponse
+import com.botbye.model.evaluate.BotbyeEvaluateConfig
 import com.botbye.model.evaluate.BotbyeEvaluateRequest
 import com.botbye.model.evaluate.BotbyeEvaluateResponse
 import com.botbye.service.httpclient.OkHttpClientFactory
@@ -35,6 +36,7 @@ class Botbye(
     private var evaluateBaseUrl: String = "${botbyeConfig.botbyeEndpoint}/api/v1/protect/evaluate"
     private var evaluateWriter: ObjectWriter = buildEvaluateWriter(botbyeConfig.serverKey)
     private var phishingBaseUrl: HttpUrl? = botbyePhishingConfig?.let { buildPhishingBaseUrl(it) }
+    private val bypassConfig = BotbyeEvaluateConfig(bypassBotValidation = true)
 
     init {
         runBlocking {
@@ -71,10 +73,13 @@ class Botbye(
         )
 
         return try {
-            handleResponse(response = client.sendRequest(httpRequest)) ?: BotbyeEvaluateResponse()
+            handleResponse(response = client.sendRequest(httpRequest)) ?: BotbyeEvaluateResponse(config = bypassConfig)
         } catch (e: Exception) {
             logger.warn("[BotBye] exception occurred: {}", e.message, e)
-            BotbyeEvaluateResponse(error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"))
+            BotbyeEvaluateResponse(
+                config = bypassConfig,
+                error = BotbyeError(e.message ?: "[BotBye] failed to sendRequest"),
+            )
         }
     }
 

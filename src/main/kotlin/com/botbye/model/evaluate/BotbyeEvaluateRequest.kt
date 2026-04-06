@@ -16,6 +16,7 @@ data class BotbyeEvaluateRequest private constructor(
     val event: BotbyeEventInfo? = null,
     val user: BotbyeUserInfo? = null,
     val request: BotbyeRequestInfo,
+    val config: BotbyeEvaluateConfig = BotbyeEvaluateConfig(),
     val customFields: Map<String, String> = emptyMap(),
 ) {
     @field:JsonProperty("integration")
@@ -63,13 +64,22 @@ data class BotbyeEvaluateRequest private constructor(
             eventStatus: BotbyeEventStatus,
             botbyeResult: String? = null,
             customFields: Map<String, String> = emptyMap(),
-        ) = BotbyeEvaluateRequest(
-            botbyeResult = botbyeResult,
-            event = BotbyeEventInfo(type = eventType, status = eventStatus),
-            user = user,
-            request = BotbyeRequestInfo(ip = ip, headers = headers),
-            customFields = customFields,
-        )
+        ): BotbyeEvaluateRequest {
+            val hasResult = !botbyeResult.isNullOrBlank()
+
+            return BotbyeEvaluateRequest(
+                botbyeResult = if (hasResult) botbyeResult else null,
+                event = BotbyeEventInfo(type = eventType, status = eventStatus),
+                user = user,
+                request = BotbyeRequestInfo(ip = ip, headers = headers),
+                config = if (hasResult) {
+                    BotbyeEvaluateConfig()
+                } else {
+                    BotbyeEvaluateConfig(bypassBotValidation = true)
+                },
+                customFields = customFields,
+            )
+        }
 
         /**
          * Combined Level 1+2: Bot validation + risk evaluation in a single call.
