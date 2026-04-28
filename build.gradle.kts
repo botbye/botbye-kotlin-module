@@ -5,12 +5,12 @@ plugins {
     signing
     id("java-library")
     id("java")
-    kotlin("jvm") version "1.9.20"
+    kotlin("jvm") version "2.3.20"
     id("org.jreleaser") version "1.18.0"
 }
 
 group = "com.botbye"
-version = "1.0.2"
+version = "2.0.0"
 
 repositories {
     mavenCentral()
