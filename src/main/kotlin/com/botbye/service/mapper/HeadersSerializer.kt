@@ -9,13 +9,6 @@ data class Headers(val headers: Map<String, List<String>>) {
         buildMap(headers.size) {
             headers.forEach { (k, v) -> put(k.lowercase(), v.joinToString()) }
         }
-
-    fun extractBotbyeResult(headerName: String = "X-Botbye-Result"): String? =
-        headers.entries
-            .firstOrNull { it.key.equals(headerName, ignoreCase = true) }
-            ?.value
-            ?.firstOrNull()
-            ?.takeIf { it.isNotBlank() }
 }
 
 class HeadersSerializer : JsonSerializer<Headers>() {

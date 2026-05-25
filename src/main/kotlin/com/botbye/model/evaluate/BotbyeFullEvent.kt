@@ -11,7 +11,6 @@ import com.fasterxml.jackson.databind.annotation.JsonNaming
  * Combined Level 1+2: Bot validation + risk evaluation in a single call.
  * Use when there is no separate proxy — the middleware validates the token
  * and evaluates ATO/abuse risk in one request.
- * [config.bypassBotValidation] is always `false`.
  */
 @JsonAppend(attrs = [JsonAppend.Attr("server_key")])
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -20,7 +19,6 @@ data class BotbyeFullEvent(
     val request: BotbyeRequestInfo,
     val event: BotbyeEventInfo,
     val user: BotbyeUserInfo,
-    val config: BotbyeEvaluateConfig = BotbyeEvaluateConfig(),
     val customFields: Map<String, String> = emptyMap(),
 ) : BotbyeEvent {
     companion object {

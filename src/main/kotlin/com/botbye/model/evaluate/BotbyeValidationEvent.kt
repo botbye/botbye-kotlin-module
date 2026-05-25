@@ -16,7 +16,6 @@ import com.fasterxml.jackson.databind.annotation.JsonNaming
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 data class BotbyeValidationEvent(
     val request: BotbyeRequestInfo,
-    val config: BotbyeEvaluateConfig = BotbyeEvaluateConfig(),
     val customFields: Map<String, String> = emptyMap(),
 ) : BotbyeEvent {
     companion object {

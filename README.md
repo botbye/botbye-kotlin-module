@@ -14,13 +14,13 @@ BotBye goes beyond fixed bot/ATO checks. Risk dimensions and metrics are fully d
 ### Gradle (Kotlin DSL)
 
 ```kotlin
-implementation("com.botbye:kotlin-module:2.0.0")
+implementation("com.botbye:kotlin-module:2.1.0")
 ```
 
 ### Gradle (Groovy DSL)
 
 ```groovy
-implementation 'com.botbye:kotlin-module:2.0.0'
+implementation 'com.botbye:kotlin-module:2.1.0'
 ```
 
 ### Maven
@@ -29,7 +29,7 @@ implementation 'com.botbye:kotlin-module:2.0.0'
 <dependency>
     <groupId>com.botbye</groupId>
     <artifactId>kotlin-module</artifactId>
-    <version>2.0.0</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
@@ -80,9 +80,6 @@ val response = botbye.evaluate(BotbyeValidationEvent(
 if (response.isBlocked) {
     return ResponseEntity.status(403).body("Access denied")
 }
-
-// Propagate bot score to Level 2 via header
-httpResponse.setHeader(Botbye.RESULT_HEADER, botbye.encodeResult(response))
 ```
 
 ### 3. Risk Scoring & Event Logging (Level 2)
@@ -182,11 +179,11 @@ val response = botbye.evaluate(BotbyeFullEvent(
 | `decision` | `BotbyeDecision` | `ALLOW`, `CHALLENGE`, or `BLOCK` |
 | `riskScore` | `Double?` | Overall risk score (0–1) |
 | `scores` | `Map<String, Double>?` | Per-dimension scores (`bot`, `ato`, `abuse`, ...) |
-| `signals` | `List<String>?` | Triggered signal names (e.g., `BruteForce`, `ImpossibleTravel`) |
+| `signals` | `Set<String>?` | Triggered signal names (e.g., `BruteForce`, `ImpossibleTravel`) |
 | `challenge` | `BotbyeChallenge?` | Challenge type and token (when decision is `CHALLENGE`) |
 | `extraData` | `BotbyeExtraData?` | Enriched device data (IP, country, browser, device, etc.) |
-| `config` | `BotbyeEvaluateConfig` | Config flags (`bypassBotValidation`) |
 | `error` | `BotbyeError?` | Error details (on fallback) |
+| `botbyeResult` | `String?` | Encoded result for Level 1→2 propagation |
 
 ```kotlin
 response.decision              // BotbyeDecision.ALLOW
@@ -200,20 +197,16 @@ response.extraData?.country    // "US"
 
 ## Level 1 to Level 2 Propagation
 
-When using both levels, propagate the Level 1 result to Level 2 via the `X-Botbye-Result` header. This allows the platform to link both evaluations by `requestId` and combine bot score from Level 1 with risk scores from Level 2 into a single unified result:
+When using both levels, propagate the Level 1 result to Level 2 via the `botbyeResult` field from the response. This allows the platform to link both evaluations by `requestId` and combine bot score from Level 1 with risk scores from Level 2 into a single unified result:
 
 ```kotlin
-// Level 1 (proxy) — validate and forward result
-val response = botbye.evaluate(BotbyeValidationEvent(...))
-httpResponse.setHeader(Botbye.RESULT_HEADER, botbye.encodeResult(response))
+// Level 1 (proxy) — validate and get result
+val l1Response = botbye.evaluate(BotbyeValidationEvent(...))
 
-// Or bypass validation entirely
-httpResponse.setHeader(Botbye.RESULT_HEADER, botbye.bypassResult())
-
-// Level 2 (middleware) — pass the header value as botbyeResult
-val response = botbye.evaluate(BotbyeRiskScoringEvent(
+// Pass botbyeResult to Level 2 (e.g. via header or directly)
+val l2Response = botbye.evaluate(BotbyeRiskScoringEvent(
     // ...
-    botbyeResult = request.getHeader("X-Botbye-Result"),
+    botbyeResult = l1Response.botbyeResult,
 ))
 ```
 
@@ -236,7 +229,7 @@ val config = BotbyeConfig(
 
 ## Error Handling
 
-The SDK follows a **fail-open** strategy. On network or server errors, `evaluate()` returns a bypass response (`BotbyeDecision.ALLOW` with `bypassBotValidation = true`) instead of throwing:
+The SDK follows a **fail-open** strategy. On network or server errors, `evaluate()` returns a default response (`BotbyeDecision.ALLOW` with error details) instead of throwing:
 
 ```kotlin
 val response = botbye.evaluate(event)
@@ -280,7 +273,6 @@ class BotbyeFilter(private val botbye: Botbye) : CoWebFilter() {
             return
         }
 
-        exchange.response.headers.set(Botbye.RESULT_HEADER, botbye.encodeResult(result))
         chain.filter(exchange)
     }
 }
@@ -313,8 +305,6 @@ fun Application.configureBotbye(botbye: Botbye) {
             finish()
             return@intercept
         }
-
-        call.response.header(Botbye.RESULT_HEADER, botbye.encodeResult(response))
     }
 }
 ```

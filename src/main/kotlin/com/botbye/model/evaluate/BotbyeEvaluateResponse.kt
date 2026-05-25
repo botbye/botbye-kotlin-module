@@ -16,12 +16,12 @@ data class BotbyeEvaluateResponse(
     val requestId: UUID? = null,
     val decision: BotbyeDecision = BotbyeDecision.ALLOW,
     val riskScore: Double? = null,
-    val signals: List<String>? = null,
+    val signals: Set<String>? = null,
     val scores: Map<String, Double>? = null,
-    val config: BotbyeEvaluateConfig = BotbyeEvaluateConfig(),
     val challenge: BotbyeChallenge? = null,
     val extraData: BotbyeExtraData? = null,
     val error: BotbyeError? = null,
+    val botbyeResult: String? = null,
 ) {
     @get:JsonIgnore
     val isBlocked: Boolean get() = decision == BotbyeDecision.BLOCK

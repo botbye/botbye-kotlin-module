@@ -1,9 +1,7 @@
 package com.botbye
 
-import com.botbye.Botbye.Companion.RESULT_HEADER
 import com.botbye.model.common.BotbyeConfig
 import com.botbye.model.common.BotbyeError
-import com.botbye.model.evaluate.BotbyeEvaluateConfig
 import com.botbye.model.evaluate.BotbyeEvaluateResponse
 import com.botbye.model.evaluate.BotbyeEvent
 import com.botbye.model.init.InitErrorResponse
@@ -19,7 +17,6 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.ObjectWriter
 import java.net.ConnectException
 import java.net.SocketTimeoutException
-import java.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -40,15 +37,8 @@ class Botbye(
     private val logger: Logger = LoggerFactory.getLogger(Botbye::class.java)
     private var evaluateBaseUrl: String = "${botbyeConfig.botbyeEndpoint}/api/v1/protect/evaluate"
     private var phishingBaseUrl: HttpUrl? = botbyePhishingConfig?.let { buildPhishingBaseUrl(it) }
-    private val bypassResultBase64: String = Base64.getEncoder().encodeToString(
-        mapper.writeValueAsBytes(BotbyeEvaluateResponse(config = bypassConfig)),
-    )
 
-    companion object {
-        const val RESULT_HEADER = "X-Botbye-Result"
 
-        private val bypassConfig = BotbyeEvaluateConfig(bypassBotValidation = true)
-    }
 
     init {
         runBlocking {
@@ -83,30 +73,14 @@ class Botbye(
         )
 
         return try {
-            handleResponse(response = client.sendRequest(httpRequest), checkStatus = true) ?: BotbyeEvaluateResponse(config = bypassConfig)
+            handleResponse(response = client.sendRequest(httpRequest), checkStatus = true) ?: BotbyeEvaluateResponse()
         } catch (e: Exception) {
             logger.warn("[BotBye] exception occurred: {}", e.message, e)
             BotbyeEvaluateResponse(
-                config = bypassConfig,
                 error = BotbyeError(classifyError(e)),
             )
         }
     }
-
-    /**
-     * Encodes evaluate response as base64 JSON for propagation
-     * to Level 2 via [RESULT_HEADER].
-     * Mirrors openresty `M.encodeResult()`.
-     */
-    fun encodeResult(response: BotbyeEvaluateResponse): String =
-        Base64.getEncoder().encodeToString(mapper.writeValueAsBytes(response))
-
-    /**
-     * Returns pre-computed bypass result (base64 JSON with `bypass_bot_validation = true`).
-     * Use when request should not be validated (excluded URI, service token, etc).
-     * Mirrors openresty `M.propagateBypass()`.
-     */
-    fun bypassResult(): String = bypassResultBase64
 
     fun setConf(config: BotbyeConfig) {
         botbyeConfig = config
@@ -168,10 +142,12 @@ class Botbye(
         }
     }
 
-    private fun classifyError(e: Exception): String = when (e) {
-        is SocketTimeoutException -> "timeout"
-        is ConnectException -> "connection error"
-        is JsonProcessingException -> "invalid json response"
+    private fun classifyError(e: Exception): String = when {
+        e is SocketTimeoutException -> "timeout"
+        e is ConnectException -> "connection error"
+        e is JsonProcessingException -> "invalid json response"
+        e is java.io.IOException -> "connection error"
+        e.message?.startsWith("connection error") == true -> "connection error"
         else -> e.message ?: "unknown error"
     }
 
