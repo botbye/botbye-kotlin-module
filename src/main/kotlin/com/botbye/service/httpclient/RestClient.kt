@@ -15,7 +15,7 @@ interface RestClient {
 }
 
 class OkHttpRestClient(
-    private val client: OkHttpClient,
+    val client: OkHttpClient,
 ) : RestClient {
     override suspend fun sendRequest(request: Request): Response {
         return suspendCancellableCoroutine { continuation ->

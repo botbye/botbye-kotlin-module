@@ -28,11 +28,28 @@ import okhttp3.Response
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
+/**
+ * Derives a phishing RestClient that shares the dispatcher + connection pool of [base]
+ * but enables retryOnConnectionFailure (safe for the idempotent fetchImage GET). Falls
+ * back to [base] if it is not an OkHttp-backed client (e.g. a test double).
+ */
+private fun phishingRestClientFrom(base: RestClient): RestClient =
+    if (base is OkHttpRestClient) {
+        OkHttpRestClient(base.client.newBuilder().retryOnConnectionFailure(true).build())
+    } else {
+        base
+    }
+
 class Botbye(
     private var botbyeConfig: BotbyeConfig,
     private var botbyePhishingConfig: BotbyePhishingConfig? = null,
     private val client: RestClient = OkHttpRestClient(OkHttpClientFactory().createClient(botbyeConfig)),
     private val mapper: ObjectMapper = ObjectMapperFactory().createObjectMapper(),
+    // Phishing fetchImage is an idempotent GET; it reuses the same dispatcher + connection
+    // pool as [client] but with retryOnConnectionFailure = true, so a stale pooled keep-alive
+    // connection (closed by the server while idle) is transparently re-established instead of
+    // surfacing "unexpected end of stream".
+    private val phishingClient: RestClient = phishingRestClientFrom(client),
 ) {
     private val logger: Logger = LoggerFactory.getLogger(Botbye::class.java)
     private var evaluateBaseUrl: String = "${botbyeConfig.botbyeEndpoint}/api/v1/protect/evaluate"
@@ -93,7 +110,7 @@ class Botbye(
     }
 
     private fun buildPhishingBaseUrl(conf: BotbyePhishingConfig): HttpUrl? =
-        "${conf.endpoint}/api/v1/phishing/${conf.accountId}/projects/${conf.projectId}/image"
+        "${conf.endpoint}/api/v1/phishing/image/${conf.clientKey}"
             .toHttpUrlOrNull()
 
     suspend fun fetchImage(origin: String?, imageId: String? = null): BotbyePhishingResponse {
@@ -116,13 +133,12 @@ class Botbye(
         val request = Request.Builder()
             .url(url)
             .get()
-            .addHeader("X-Api-Key", conf.apiKey)
             .addHeader("Origin", origin ?: "origin is missing")
             .build()
 
         return try {
             withContext(Dispatchers.IO) {
-                client.sendRequest(request).use { response ->
+                phishingClient.sendRequest(request).use { response ->
                     val responseHeaders = buildMap(response.headers.size) {
                         for (i in 0 until response.headers.size) {
                             put(response.headers.name(i), response.headers.value(i))
@@ -138,7 +154,7 @@ class Botbye(
             }
         } catch (e: Exception) {
             logger.warn("[BotBye] phishing image exception occurred: {}", e.message, e)
-            BotbyePhishingResponse(error = BotbyeError(e.message ?: "[BotBye] failed to fetch phishing image"))
+            BotbyePhishingResponse(error = BotbyeError(classifyError(e)))
         }
     }
 

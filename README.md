@@ -169,6 +169,48 @@ val response = botbye.evaluate(BotbyeFullEvent(
 ))
 ```
 
+### 5. Phishing Image Tracking
+
+The phishing tracking pixel is embedded on a protected site; when a phishing clone copies the
+markup, the pixel is requested with the clone's `Origin`, which lets BotBye record a phishing
+candidate.
+
+The project is identified by a public, browser-safe `clientKey` in the URL path, so **no server
+key is sent** — phishing uses its own client key, separate from the evaluate `serverKey`.
+
+Configure phishing once (independently of the evaluate config), then forward the incoming `Origin`:
+
+```kotlin
+import com.botbye.model.phishing.BotbyePhishingConfig
+
+botbye.setPhishingConf(BotbyePhishingConfig(
+    endpoint = "https://verify.botbye.com", // default
+    clientKey = "<public-client-key>",
+))
+
+// Default PNG pixel
+val res = botbye.fetchImage(origin = request.getHeader("Origin"))
+
+// SVG variant — pass an imageId
+val svg = botbye.fetchImage(origin = request.getHeader("Origin"), imageId = "hero-banner")
+
+res.status   // 200
+res.headers  // {Content-Type=image/png, ...}
+res.body     // ByteArray — raw image bytes to relay back to the browser
+res.error    // BotbyeError? — non-null on transport failure
+```
+
+`fetchImage` is a `suspend` function (like `evaluate`); wrap it in `runBlocking` in a servlet context.
+
+`fetchImage` returns `BotbyePhishingResponse`:
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | `Int` | Upstream HTTP status (`0` on transport failure) |
+| `headers` | `Map<String, String>` | Response headers (e.g. `Content-Type`) |
+| `body` | `ByteArray` | Raw image bytes (PNG, or SVG when `imageId` is set) |
+| `error` | `BotbyeError?` | Normalized transport error: `timeout`, `connection error`, or `invalid json response` |
+
 ## Response
 
 `BotbyeEvaluateResponse` contains:
