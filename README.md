@@ -14,13 +14,13 @@ BotBye goes beyond fixed bot/ATO checks. Risk dimensions and metrics are fully d
 ### Gradle (Kotlin DSL)
 
 ```kotlin
-implementation("com.botbye:kotlin-module:2.1.0")
+implementation("com.botbye:kotlin-module:3.0.0")
 ```
 
 ### Gradle (Groovy DSL)
 
 ```groovy
-implementation 'com.botbye:kotlin-module:2.1.0'
+implementation 'com.botbye:kotlin-module:3.0.0'
 ```
 
 ### Maven
@@ -29,7 +29,7 @@ implementation 'com.botbye:kotlin-module:2.1.0'
 <dependency>
     <groupId>com.botbye</groupId>
     <artifactId>kotlin-module</artifactId>
-    <version>2.1.0</version>
+    <version>3.0.0</version>
 </dependency>
 ```
 
@@ -52,8 +52,8 @@ Every evaluation call is also recorded as a **protection event** — logged to t
 ### 1. Initialize the Client
 
 ```kotlin
-import com.botbye.Botbye
-import com.botbye.model.common.BotbyeConfig
+import com.botbye.protection.Botbye
+import com.botbye.protection.BotbyeConfig
 
 val config = BotbyeConfig(
     serverKey = "your-server-key" // from https://app.botbye.com
@@ -67,7 +67,7 @@ val botbye = Botbye(config)
 Validate device tokens where user identity is not yet available — at the proxy layer or in a middleware before authentication.
 
 ```kotlin
-import com.botbye.model.evaluate.BotbyeValidationEvent
+import com.botbye.protection.model.BotbyeValidationEvent
 
 val response = botbye.evaluate(BotbyeValidationEvent(
     ip = request.remoteAddr,
@@ -87,10 +87,10 @@ if (response.isBlocked) {
 Evaluate risk and log events when user identity is known. Each call both scores the request **and** feeds the real-time metrics engine, so you should call `evaluate()` for every significant user action — not just when you need a decision.
 
 ```kotlin
-import com.botbye.model.evaluate.BotbyeRiskScoringEvent
-import com.botbye.model.evaluate.BotbyeUserInfo
-import com.botbye.model.evaluate.BotbyeEventStatus
-import com.botbye.model.evaluate.BotbyeDecision
+import com.botbye.protection.model.BotbyeRiskScoringEvent
+import com.botbye.protection.model.BotbyeUserInfo
+import com.botbye.protection.model.BotbyeEventStatus
+import com.botbye.protection.model.BotbyeDecision
 
 val response = botbye.evaluate(BotbyeRiskScoringEvent(
     ip = request.remoteAddr,
@@ -157,7 +157,7 @@ botbye.evaluate(BotbyeRiskScoringEvent(
 Use when there is no separate proxy layer — validates the device token and evaluates risk in a single call.
 
 ```kotlin
-import com.botbye.model.evaluate.BotbyeFullEvent
+import com.botbye.protection.model.BotbyeFullEvent
 
 val response = botbye.evaluate(BotbyeFullEvent(
     ip = request.remoteAddr,
@@ -175,24 +175,26 @@ The phishing tracking pixel is embedded on a protected site; when a phishing clo
 markup, the pixel is requested with the clone's `Origin`, which lets BotBye record a phishing
 candidate.
 
-The project is identified by a public, browser-safe `clientKey` in the URL path, so **no server
-key is sent** — phishing uses its own client key, separate from the evaluate `serverKey`.
-
-Configure phishing once (independently of the evaluate config), then forward the incoming `Origin`:
+Phishing lives in its own dedicated `BotbyePhishingClient` — **separate from the evaluate `Botbye`
+client**. The project is identified by a public, browser-safe `clientKey` in the URL path, so the
+client needs **no server key** and performs **no init handshake**; you can construct it standalone.
 
 ```kotlin
-import com.botbye.model.phishing.BotbyePhishingConfig
+import com.botbye.phishing.BotbyePhishingClient
+import com.botbye.phishing.BotbyePhishingConfig
 
-botbye.setPhishingConf(BotbyePhishingConfig(
-    endpoint = "https://verify.botbye.com", // default
-    clientKey = "<public-client-key>",
-))
+val phishing = BotbyePhishingClient(
+    BotbyePhishingConfig(
+        endpoint = "https://verify.botbye.com", // default
+        clientKey = "<public-client-key>",
+    )
+)
 
 // Default PNG pixel
-val res = botbye.fetchImage(origin = request.getHeader("Origin"))
+val res = phishing.fetchImage(origin = request.getHeader("Origin"))
 
 // SVG variant — pass an imageId
-val svg = botbye.fetchImage(origin = request.getHeader("Origin"), imageId = "hero-banner")
+val svg = phishing.fetchImage(origin = request.getHeader("Origin"), imageId = "hero-banner")
 
 res.status   // 200
 res.headers  // {Content-Type=image/png, ...}
@@ -287,8 +289,8 @@ if (response.error != null) {
 ### Spring WebFlux (CoWebFilter)
 
 ```kotlin
-import com.botbye.Botbye
-import com.botbye.model.evaluate.BotbyeValidationEvent
+import com.botbye.protection.Botbye
+import com.botbye.protection.model.BotbyeValidationEvent
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import org.springframework.web.server.CoWebFilter
@@ -323,8 +325,8 @@ class BotbyeFilter(private val botbye: Botbye) : CoWebFilter() {
 ### Ktor Plugin
 
 ```kotlin
-import com.botbye.Botbye
-import com.botbye.model.evaluate.BotbyeValidationEvent
+import com.botbye.protection.Botbye
+import com.botbye.protection.model.BotbyeValidationEvent
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
