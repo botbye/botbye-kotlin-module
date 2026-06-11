@@ -25,9 +25,4 @@ data class BotbyeConfig(
         require(serverKey.isNotBlank()) { "[BotBye] server key is not specified" }
         botbyeEndpoint = normalizeBaseUrl(botbyeEndpoint)
     }
-
-    companion object {
-        const val MODULE_NAME = "Kotlin"
-        const val MODULE_VERSION = "3.0.0"
-    }
 }

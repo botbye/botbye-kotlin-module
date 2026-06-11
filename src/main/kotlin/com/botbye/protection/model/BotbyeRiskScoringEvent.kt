@@ -1,6 +1,6 @@
 package com.botbye.protection.model
 
-import com.botbye.protection.BotbyeConfig
+import com.botbye.common.ModuleInfo
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
@@ -24,8 +24,8 @@ data class BotbyeRiskScoringEvent(
 ) : BotbyeEvent {
     companion object {
         private val INTEGRATION = BotbyeIntegrationInfo(
-            moduleName = BotbyeConfig.MODULE_NAME,
-            moduleVersion = BotbyeConfig.MODULE_VERSION,
+            moduleName = ModuleInfo.NAME,
+            moduleVersion = ModuleInfo.VERSION,
         )
 
         operator fun invoke(

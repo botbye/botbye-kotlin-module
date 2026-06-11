@@ -2,6 +2,7 @@ package com.botbye.phishing
 
 import com.botbye.common.BotbyeError
 import com.botbye.common.ErrorClassifier
+import com.botbye.common.ModuleInfo
 import com.botbye.common.http.OkHttpClientFactory
 import com.botbye.common.http.OkHttpRestClient
 import com.botbye.common.http.RestClient
@@ -72,6 +73,8 @@ class BotbyePhishingClient(
             .url(url)
             .get()
             .addHeader("Origin", origin ?: "origin is missing")
+            .addHeader("Module-Name", ModuleInfo.NAME)
+            .addHeader("Module-Version", ModuleInfo.VERSION)
             .build()
 
         return try {

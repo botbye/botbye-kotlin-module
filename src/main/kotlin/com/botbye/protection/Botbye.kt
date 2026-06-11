@@ -2,6 +2,7 @@ package com.botbye.protection
 
 import com.botbye.common.BotbyeError
 import com.botbye.common.ErrorClassifier
+import com.botbye.common.ModuleInfo
 import com.botbye.common.http.OkHttpClientFactory
 import com.botbye.common.http.OkHttpRestClient
 import com.botbye.common.http.RestClient
@@ -114,8 +115,8 @@ class Botbye(
     }
 
     private fun Request.Builder.addCommonHeaders() {
-        addHeader("Module-Name", BotbyeConfig.MODULE_NAME)
-        addHeader("Module-Version", BotbyeConfig.MODULE_VERSION)
+        addHeader("Module-Name", ModuleInfo.NAME)
+        addHeader("Module-Version", ModuleInfo.VERSION)
     }
 
     private suspend inline fun <reified T> handleResponse(response: Response, checkStatus: Boolean = false): T? {
