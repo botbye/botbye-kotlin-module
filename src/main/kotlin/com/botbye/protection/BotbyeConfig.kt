@@ -1,14 +1,12 @@
 package com.botbye.protection
 
 import com.botbye.common.normalizeBaseUrl
-import okhttp3.MediaType
-import okhttp3.MediaType.Companion.toMediaType
 import java.time.Duration
 
 data class BotbyeConfig(
     var botbyeEndpoint: String = "https://verify.botbye.com",
     var serverKey: String,
-    var contentType: MediaType = "application/json".toMediaType(),
+    var contentType: String = "application/json",
     // client config
     val readTimeout: Duration = Duration.ofSeconds(2),
     val writeTimeout: Duration = Duration.ofSeconds(2),

@@ -207,6 +207,20 @@ res.error    // BotbyeError? — non-null on transport failure
 
 `fetchImage` is a `suspend` function (like `evaluate`); wrap it in `runBlocking` in a servlet context.
 
+Like the evaluate client, the phishing client supports a request extractor so a framework SDK can
+read the `Origin` from a raw request once and callers pass only their request object:
+
+```kotlin
+import com.botbye.phishing.BotbyePhishingClient
+
+val phishing: BotbyePhishingClient<HttpServletRequest> = BotbyePhishingClient.withExtractor(
+    BotbyePhishingConfig(clientKey = "<public-client-key>"),
+) { req -> req.getHeader("Origin") }
+
+val res = phishing.fetchImage(request)                       // PNG
+val svg = phishing.fetchImage(request, imageId = "hero-banner") // SVG
+```
+
 `fetchImage` returns `BotbyePhishingResponse`:
 
 | Field | Type | Description |
@@ -287,74 +301,131 @@ if (response.error != null) {
 }
 ```
 
-## Framework Integration
+## Request Extractors (framework integration)
 
-### Spring WebFlux (CoWebFilter)
-
-```kotlin
-import com.botbye.protection.Botbye
-import com.botbye.protection.model.BotbyeValidationEvent
-import org.springframework.http.HttpStatus
-import org.springframework.stereotype.Component
-import org.springframework.web.server.CoWebFilter
-import org.springframework.web.server.CoWebFilterChain
-import org.springframework.web.server.ServerWebExchange
-
-@Component
-class BotbyeFilter(private val botbye: Botbye) : CoWebFilter() {
-
-    override suspend fun filter(exchange: ServerWebExchange, chain: CoWebFilterChain) {
-        val request = exchange.request
-        val headers = request.headers.toSingleValueMap()
-
-        val result = botbye.evaluate(BotbyeValidationEvent(
-            ip = request.remoteAddress?.address?.hostAddress ?: "",
-            token = request.queryParams.getFirst("botbye_token") ?: "",
-            headers = headers,
-            requestMethod = request.method.name(),
-            requestUri = request.uri.path,
-        ))
-
-        if (result.isBlocked) {
-            exchange.response.statusCode = HttpStatus.FORBIDDEN
-            return
-        }
-
-        chain.filter(exchange)
-    }
-}
-```
-
-### Ktor Plugin
+Instead of building events field-by-field at every call site, describe **once** how to turn your
+framework's request object into a `BotbyeRequestInfo`, then pass only the raw request to the
+`evaluate*` methods. Build the client with `Botbye.withExtractor(...)` — the type parameter is your
+framework request type:
 
 ```kotlin
 import com.botbye.protection.Botbye
-import com.botbye.protection.model.BotbyeValidationEvent
-import io.ktor.http.*
-import io.ktor.server.application.*
-import io.ktor.server.response.*
+import com.botbye.protection.BotbyeConfig
+import com.botbye.protection.model.BotbyeRequestInfo
 
-fun Application.configureBotbye(botbye: Botbye) {
-    intercept(ApplicationCallPipeline.Plugins) {
-        val headers = call.request.headers.entries()
-            .associate { (k, v) -> k to v.joinToString(", ") }
-
-        val response = botbye.evaluate(BotbyeValidationEvent(
-            ip = call.request.local.remoteAddress,
-            token = call.request.queryParameters["botbye_token"] ?: "",
-            headers = headers,
-            requestMethod = call.request.local.method.value,
-            requestUri = call.request.local.uri,
-        ))
-
-        if (response.isBlocked) {
-            call.respond(HttpStatusCode.Forbidden, "Access denied")
-            finish()
-            return@intercept
-        }
-    }
+val botbye: Botbye<HttpServletRequest> = Botbye.withExtractor(
+    config = BotbyeConfig(serverKey = "your-server-key"),
+) { req ->
+    BotbyeRequestInfo(
+        ip = req.remoteAddr,
+        headers = req.headerNames.toList().associateWith { req.getHeader(it) },
+        requestMethod = req.method,
+        requestUri = req.requestURI,
+        token = req.getParameter("botbye_token"),
+    )
 }
 ```
+
+Now the call sites only pass the raw request (plus user/event for Level 2):
+
+```kotlin
+import com.botbye.protection.model.BotbyeEventStatus
+import com.botbye.protection.model.BotbyeUserInfo
+
+// Level 1 — bot validation
+val l1 = botbye.evaluateValidation(request)
+
+// Level 2 — risk scoring & event logging
+val l2 = botbye.evaluateRiskScoring(
+    request = request,
+    user = BotbyeUserInfo(accountId = userId),
+    eventType = "LOGIN",
+    eventStatus = BotbyeEventStatus.SUCCESSFUL,
+    botbyeResult = l1.botbyeResult,
+)
+
+// Level 1+2 combined (no separate proxy)
+val full = botbye.evaluateFull(
+    request = request,
+    user = BotbyeUserInfo(accountId = userId),
+    eventType = "LOGIN",
+    eventStatus = BotbyeEventStatus.FAILED,
+)
+```
+
+An explicit `token` argument on any `evaluate*` method overrides the one returned by the extractor
+(`token ?: extracted.token`). The `getIpFromHeaders(headers)` helper is handy inside extractors when
+the IP lives behind a proxy.
+
+### Spring (HttpServletRequest)
+
+```kotlin
+val botbye: Botbye<HttpServletRequest> = Botbye.withExtractor(BotbyeConfig(serverKey = "...")) { req ->
+    BotbyeRequestInfo(
+        ip = getIpFromHeaders(req.headerNames.toList().associateWith { req.getHeader(it) }) ?: req.remoteAddr,
+        headers = req.headerNames.toList().associateWith { req.getHeader(it) },
+        requestMethod = req.method,
+        requestUri = req.requestURI,
+        token = req.getParameter("botbye_token"),
+    )
+}
+
+// in a filter / interceptor:
+if (botbye.evaluateValidation(request).isBlocked) {
+    response.sendError(403, "Access denied")
+}
+```
+
+### Ktor (ApplicationRequest)
+
+```kotlin
+import io.ktor.server.request.*
+
+val botbye: Botbye<ApplicationRequest> = Botbye.withExtractor(BotbyeConfig(serverKey = "...")) { req ->
+    BotbyeRequestInfo(
+        ip = req.local.remoteAddress,
+        headers = req.headers.entries().associate { (k, v) -> k to v.joinToString(", ") },
+        requestMethod = req.httpMethod.value,
+        requestUri = req.uri,
+        token = req.queryParameters["botbye_token"],
+    )
+}
+
+// in a plugin / interceptor:
+if (botbye.evaluateValidation(call.request).isBlocked) {
+    call.respond(HttpStatusCode.Forbidden, "Access denied")
+}
+```
+
+> The explicit-event API is always available too: `Botbye(config)` returns a `Botbye<Nothing>` on
+> which you call `evaluate(BotbyeValidationEvent(...))` etc. with no extractor.
+
+## Custom HTTP Transport
+
+The SDK depends only on the `BotbyeHttpClient` interface; OkHttp is the default
+(`OkHttpBotbyeClient`). To run on a different HTTP stack, implement the interface and pass it to the
+client constructor / factory:
+
+```kotlin
+import com.botbye.common.http.BotbyeHttpClient
+import com.botbye.common.http.BotbyeHttpRequest
+import com.botbye.common.http.BotbyeHttpResponse
+
+class MyHttpClient : BotbyeHttpClient {
+    override val type = "my-client"
+    override suspend fun call(request: BotbyeHttpRequest): BotbyeHttpResponse { /* ... */ }
+}
+
+val botbye = Botbye(config = BotbyeConfig(serverKey = "..."), client = MyHttpClient())
+```
+
+## Helpers
+
+| Helper | Description |
+|---|---|
+| `getIpFromHeaders(headers)` | Extract the client IP from headers (`x-forwarded-for` first hop, then `x-real-ip`). |
+| `createFallbackEvaluationResult(message)` | Build a fail-open `BotbyeEvaluateResponse` (`ALLOW` + `error`) for your own short-circuit paths. |
+| `BotbyeErrors` | Normalized error message constants: `SDK_ERROR`, `UNKNOWN_ERROR`, `TIMEOUT_ERROR`, `CONNECTION_ERROR`, `JSON_ERROR`. |
 
 ## Testing
 

@@ -3,25 +3,22 @@ package com.botbye.phishing
 import com.botbye.common.BotbyeError
 import com.botbye.common.ErrorClassifier
 import com.botbye.common.ModuleInfo
+import com.botbye.common.http.BotbyeHttpClient
+import com.botbye.common.http.BotbyeHttpRequest
+import com.botbye.common.http.OkHttpBotbyeClient
 import com.botbye.common.http.OkHttpClientFactory
-import com.botbye.common.http.OkHttpRestClient
-import com.botbye.common.http.RestClient
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.time.Duration
 
 // Phishing fetchImage is an idempotent GET, so the client retries on connection failure: a stale
 // pooled keep-alive connection (closed by the server while idle) is transparently re-established
 // instead of surfacing "unexpected end of stream".
-private fun defaultPhishingRestClient(): RestClient =
-    OkHttpRestClient(
+private fun defaultPhishingHttpClient(): BotbyeHttpClient =
+    OkHttpBotbyeClient(
         OkHttpClientFactory().createClient(
             maxRequests = 1500,
             maxRequestsPerHost = 1500,
@@ -45,19 +42,43 @@ private fun defaultPhishingRestClient(): RestClient =
  * / `Module-Version` headers. [fetchImage] fetches the tracking pixel server-side via the `/server`
  * route, which lets the backend attribute the pixel to this module even when the browser never hits
  * BotBye directly (the SDK proxies the image).
+ *
+ * Two construction modes:
+ * - [BotbyePhishingClient] `(config)` — pass the `Origin` header to [fetchImage] yourself.
+ * - [withExtractor] — binds a [BotbyePhishingRequestExtractor] of framework request `R` so callers
+ *   pass only their raw request to [fetchImage].
  */
-class BotbyePhishingClient(
+class BotbyePhishingClient<R> private constructor(
     private var config: BotbyePhishingConfig,
-    private val client: RestClient = defaultPhishingRestClient(),
+    private val client: BotbyeHttpClient,
+    private val extractor: BotbyePhishingRequestExtractor<R>?,
 ) {
     private val logger: Logger = LoggerFactory.getLogger(BotbyePhishingClient::class.java)
-    private var phishingBaseUrl: HttpUrl? = buildPhishingBaseUrl(config)
-    private var phishingInitUrl: HttpUrl? = buildPhishingInitUrl(config)
+    private var phishingBaseUrl: String = buildPhishingBaseUrl(config)
+    private var phishingInitUrl: String = buildPhishingInitUrl(config)
 
     init {
         runBlocking {
             sendInit()
         }
+    }
+
+    companion object {
+        /** Standalone client; pass the `Origin` header to [fetchImage] explicitly. */
+        operator fun invoke(
+            config: BotbyePhishingConfig,
+            client: BotbyeHttpClient = defaultPhishingHttpClient(),
+        ): BotbyePhishingClient<Nothing> = BotbyePhishingClient(config, client, extractor = null)
+
+        /**
+         * Factory for framework SDKs: bind a [BotbyePhishingRequestExtractor] so consumers pass only
+         * their raw request object to [fetchImage].
+         */
+        fun <R> withExtractor(
+            config: BotbyePhishingConfig,
+            extractor: BotbyePhishingRequestExtractor<R>,
+            client: BotbyeHttpClient = defaultPhishingHttpClient(),
+        ): BotbyePhishingClient<R> = BotbyePhishingClient(config, client, extractor)
     }
 
     fun setConf(config: BotbyePhishingConfig) {
@@ -66,57 +87,51 @@ class BotbyePhishingClient(
         phishingInitUrl = buildPhishingInitUrl(config)
     }
 
-    private fun buildPhishingBaseUrl(conf: BotbyePhishingConfig): HttpUrl? =
+    private fun buildPhishingBaseUrl(conf: BotbyePhishingConfig): String =
         "${conf.endpoint}/api/v1/phishing/image/${conf.clientKey}/server"
-            .toHttpUrlOrNull()
 
-    private fun buildPhishingInitUrl(conf: BotbyePhishingConfig): HttpUrl? =
+    private fun buildPhishingInitUrl(conf: BotbyePhishingConfig): String =
         "${conf.endpoint}/api/v1/phishing/init-request/v1/${conf.clientKey}"
-            .toHttpUrlOrNull()
 
+    /** Fetch the tracking pixel using an explicit `Origin` header value. */
     suspend fun fetchImage(origin: String?, imageId: String? = null): BotbyePhishingResponse {
-        val baseUrl = phishingBaseUrl
-            ?: return BotbyePhishingResponse(error = BotbyeError("[BotBye] invalid phishing endpoint url"))
-
         val url = if (imageId.isNullOrBlank()) {
-            baseUrl.newBuilder()
-                .addQueryParameter("format", "png")
-                .build()
+            "$phishingBaseUrl?format=png"
         } else {
-            baseUrl.newBuilder()
-                .addQueryParameter("image_id", imageId)
-                .addQueryParameter("format", "svg")
-                .build()
+            "$phishingBaseUrl?image_id=${urlEncode(imageId)}&format=svg"
         }
 
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("Origin", origin ?: "origin is missing")
-            .apply { addModuleHeaders() }
-            .build()
-
         return try {
-            withContext(Dispatchers.IO) {
-                client.sendRequest(request).use { response ->
-                    val responseHeaders = buildMap(response.headers.size) {
-                        for (i in 0 until response.headers.size) {
-                            put(response.headers.name(i), response.headers.value(i))
-                        }
-                    }
+            val response = client.call(
+                BotbyeHttpRequest(
+                    url = url,
+                    method = "GET",
+                    headers = moduleHeaders() + ("Origin" to (origin ?: "origin is missing")),
+                ),
+            )
 
-                    BotbyePhishingResponse(
-                        status = response.code,
-                        headers = responseHeaders,
-                        body = response.body?.bytes() ?: byteArrayOf(),
-                    )
-                }
-            }
+            BotbyePhishingResponse(
+                status = response.status,
+                headers = response.headers,
+                body = response.body,
+            )
         } catch (e: Exception) {
             logger.warn("[BotBye] phishing image exception occurred: {}", e.message, e)
             BotbyePhishingResponse(error = BotbyeError(ErrorClassifier.classify(e)))
         }
     }
+
+    /** Fetch the tracking pixel from a raw framework request (requires [withExtractor]). */
+    suspend fun fetchImage(request: R, imageId: String? = null): BotbyePhishingResponse {
+        val origin = requireExtractor().extractOrigin(request)
+
+        return fetchImage(origin = origin, imageId = imageId)
+    }
+
+    private fun requireExtractor(): BotbyePhishingRequestExtractor<R> =
+        extractor ?: error(
+            "[BotBye] no phishing extractor configured; use BotbyePhishingClient.withExtractor(...) to fetch from a raw request",
+        )
 
     /**
      * Reports the server-side phishing integration to the backend (the `SERVER_INTEGRATION_INIT`
@@ -124,33 +139,28 @@ class BotbyePhishingClient(
      * client's init handshake, since it must never block or break the customer's startup.
      */
     private suspend fun sendInit() {
-        val url = phishingInitUrl ?: run {
-            logger.warn("[BotBye] invalid phishing init url")
-
-            return
-        }
-
-        val request = Request.Builder()
-            .url(url)
-            .post(ByteArray(0).toRequestBody(null))
-            .apply { addModuleHeaders() }
-            .build()
-
         try {
-            withContext(Dispatchers.IO) {
-                client.sendRequest(request).use { response ->
-                    if (!response.isSuccessful) {
-                        logger.warn("[BotBye] phishing init-request returned HTTP {}", response.code)
-                    }
-                }
+            val response = client.call(
+                BotbyeHttpRequest(
+                    url = phishingInitUrl,
+                    method = "POST",
+                    headers = moduleHeaders(),
+                    body = ByteArray(0),
+                ),
+            )
+
+            if (response.status !in 200..299) {
+                logger.warn("[BotBye] phishing init-request returned HTTP {}", response.status)
             }
         } catch (e: Exception) {
             logger.warn("[BotBye] phishing init-request exception occurred: {}", e.message, e)
         }
     }
 
-    private fun Request.Builder.addModuleHeaders() {
-        addHeader("Module-Name", ModuleInfo.NAME)
-        addHeader("Module-Version", ModuleInfo.VERSION)
-    }
+    private fun moduleHeaders(): Map<String, String> = mapOf(
+        "Module-Name" to ModuleInfo.NAME,
+        "Module-Version" to ModuleInfo.VERSION,
+    )
+
+    private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
 }
