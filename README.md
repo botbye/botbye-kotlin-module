@@ -177,7 +177,10 @@ candidate.
 
 Phishing lives in its own dedicated `BotbyePhishingClient` — **separate from the evaluate `Botbye`
 client**. The project is identified by a public, browser-safe `clientKey` in the URL path, so the
-client needs **no server key** and performs **no init handshake**; you can construct it standalone.
+client needs **no server key**; you can construct it standalone. On construction it fires a
+best-effort server-integration init handshake (`POST /api/v1/phishing/init-request/v1/{clientKey}`)
+reporting this module, and `fetchImage` proxies the pixel via the server `/server` route so the
+backend can attribute it to this module even when the browser never reaches BotBye directly.
 
 ```kotlin
 import com.botbye.phishing.BotbyePhishingClient
