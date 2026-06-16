@@ -54,7 +54,7 @@ class Botbye<R> private constructor(
     private val client: BotbyeHttpClient,
     private val mapper: ObjectMapper,
     private val extractor: BotbyeRequestExtractor<R>?,
-) {
+) : BotbyeEvaluator {
     private val logger: Logger = LoggerFactory.getLogger(Botbye::class.java)
     private var evaluateBaseUrl: String = "${botbyeConfig.botbyeEndpoint}/api/v1/protect/evaluate"
 
@@ -85,7 +85,7 @@ class Botbye<R> private constructor(
     }
 
     /** Send a fully-built event for risk evaluation. Fails open: returns ALLOW + error on failure. */
-    suspend fun evaluate(event: BotbyeEvent): BotbyeEvaluateResponse {
+    override suspend fun evaluate(event: BotbyeEvent): BotbyeEvaluateResponse {
         val tokenQuery = event.urlToken?.let { "?$it" } ?: ""
         val writer = mapper.writerFor(event::class.java).withAttribute("server_key", botbyeConfig.serverKey)
 
@@ -171,7 +171,7 @@ class Botbye<R> private constructor(
         )
     }
 
-    fun setConf(config: BotbyeConfig) {
+    override fun setConf(config: BotbyeConfig) {
         botbyeConfig = config
         evaluateBaseUrl = "${config.botbyeEndpoint}/api/v1/protect/evaluate"
     }

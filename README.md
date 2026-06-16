@@ -193,11 +193,12 @@ val phishing = BotbyePhishingClient(
     )
 )
 
-// Default PNG pixel
-val res = phishing.fetchImage(origin = request.getHeader("Origin"))
-
-// SVG variant — pass an imageId
-val svg = phishing.fetchImage(origin = request.getHeader("Origin"), imageId = "hero-banner")
+// Proxy the browser's pixel request: forward its original query verbatim (it carries
+// format / image_id and the JS tag's module_name / module_version).
+val res = phishing.fetchImage(
+    origin = request.getHeader("Origin"),
+    query = request.parameterMap.mapValues { (_, v) -> v.first() },
+)
 
 res.status   // 200
 res.headers  // {Content-Type=image/png, ...}
@@ -217,8 +218,8 @@ val phishing: BotbyePhishingClient<HttpServletRequest> = BotbyePhishingClient.wi
     BotbyePhishingConfig(clientKey = "<public-client-key>"),
 ) { req -> req.getHeader("Origin") }
 
-val res = phishing.fetchImage(request)                       // PNG
-val svg = phishing.fetchImage(request, imageId = "hero-banner") // SVG
+// Origin via the extractor; forward the browser's pixel query for attribution
+val res = phishing.fetchImage(request, query = request.parameterMap.mapValues { (_, v) -> v.first() })
 ```
 
 `fetchImage` returns `BotbyePhishingResponse`:
@@ -227,7 +228,7 @@ val svg = phishing.fetchImage(request, imageId = "hero-banner") // SVG
 |---|---|---|
 | `status` | `Int` | Upstream HTTP status (`0` on transport failure) |
 | `headers` | `Map<String, String>` | Response headers (e.g. `Content-Type`) |
-| `body` | `ByteArray` | Raw image bytes (PNG, or SVG when `imageId` is set) |
+| `body` | `ByteArray` | Raw image bytes (PNG or SVG, per the forwarded `format` query param) |
 | `error` | `BotbyeError?` | Normalized transport error: `timeout`, `connection error`, or `invalid json response` |
 
 ## Response
@@ -354,15 +355,14 @@ val full = botbye.evaluateFull(
 ```
 
 An explicit `token` argument on any `evaluate*` method overrides the one returned by the extractor
-(`token ?: extracted.token`). The `getIpFromHeaders(headers)` helper is handy inside extractors when
-the IP lives behind a proxy.
+(`token ?: extracted.token`).
 
 ### Spring (HttpServletRequest)
 
 ```kotlin
 val botbye: Botbye<HttpServletRequest> = Botbye.withExtractor(BotbyeConfig(serverKey = "...")) { req ->
     BotbyeRequestInfo(
-        ip = getIpFromHeaders(req.headerNames.toList().associateWith { req.getHeader(it) }) ?: req.remoteAddr,
+        ip = req.remoteAddr,
         headers = req.headerNames.toList().associateWith { req.getHeader(it) },
         requestMethod = req.method,
         requestUri = req.requestURI,
@@ -423,7 +423,6 @@ val botbye = Botbye(config = BotbyeConfig(serverKey = "..."), client = MyHttpCli
 
 | Helper | Description |
 |---|---|
-| `getIpFromHeaders(headers)` | Extract the client IP from headers (`x-forwarded-for` first hop, then `x-real-ip`). |
 | `createFallbackEvaluationResult(message)` | Build a fail-open `BotbyeEvaluateResponse` (`ALLOW` + `error`) for your own short-circuit paths. |
 | `BotbyeErrors` | Normalized error message constants: `SDK_ERROR`, `UNKNOWN_ERROR`, `TIMEOUT_ERROR`, `CONNECTION_ERROR`, `JSON_ERROR`. |
 

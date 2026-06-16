@@ -93,18 +93,16 @@ class BotbyePhishingClient<R> private constructor(
     private fun buildPhishingInitUrl(conf: BotbyePhishingConfig): String =
         "${conf.endpoint}/api/v1/phishing/init-request/v1/${conf.clientKey}"
 
-    /** Fetch the tracking pixel using an explicit `Origin` header value. */
-    suspend fun fetchImage(origin: String?, imageId: String? = null): BotbyePhishingResponse {
-        val url = if (imageId.isNullOrBlank()) {
-            "$phishingBaseUrl?format=png"
-        } else {
-            "$phishingBaseUrl?image_id=${urlEncode(imageId)}&format=svg"
-        }
-
+    /**
+     * Fetch the tracking pixel using an explicit `Origin` header value. [query] is forwarded verbatim
+     * to the `/server` route — pass the browser's original pixel query (which carries `format`,
+     * `image_id`, and the JS tag's `module_name` / `module_version`).
+     */
+    suspend fun fetchImage(origin: String?, query: Map<String, String> = emptyMap()): BotbyePhishingResponse {
         return try {
             val response = client.call(
                 BotbyeHttpRequest(
-                    url = url,
+                    url = buildImageUrl(query),
                     method = "GET",
                     headers = moduleHeaders() + ("Origin" to (origin ?: "origin is missing")),
                 ),
@@ -122,10 +120,20 @@ class BotbyePhishingClient<R> private constructor(
     }
 
     /** Fetch the tracking pixel from a raw framework request (requires [withExtractor]). */
-    suspend fun fetchImage(request: R, imageId: String? = null): BotbyePhishingResponse {
+    suspend fun fetchImage(request: R, query: Map<String, String> = emptyMap()): BotbyePhishingResponse {
         val origin = requireExtractor().extractOrigin(request)
 
-        return fetchImage(origin = origin, imageId = imageId)
+        return fetchImage(origin = origin, query = query)
+    }
+
+    private fun buildImageUrl(query: Map<String, String>): String {
+        if (query.isEmpty()) {
+            return phishingBaseUrl
+        }
+
+        val queryString = query.entries.joinToString("&") { (k, v) -> "${urlEncode(k)}=${urlEncode(v)}" }
+
+        return "$phishingBaseUrl?$queryString"
     }
 
     private fun requireExtractor(): BotbyePhishingRequestExtractor<R> =
