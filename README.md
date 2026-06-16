@@ -366,8 +366,10 @@ val full = botbye.evaluateFull(
 )
 ```
 
-An explicit `token` argument on any `evaluate*` method overrides the one returned by the extractor
-(`token ?: extracted.token`).
+For `evaluateValidation` and `evaluateFull`, an explicit `token` argument overrides the one returned
+by the extractor (`token ?: extracted.token`). `evaluateRiskScoring` takes no token — Level 2 links to
+Level 1 via `botbyeResult`; a token together with user/event context is a combined call, so use
+`evaluateFull` instead.
 
 ### Spring (HttpServletRequest)
 

@@ -157,24 +157,33 @@ class Botbye<R> private constructor(
         )
     }
 
-    /** Level 2 risk evaluation from a raw framework request (requires [withExtractor]). */
+    /**
+     * Level 2 risk evaluation from a raw framework request (requires [withExtractor]).
+     *
+     * No device [token] parameter by design: Level 2 is post-authentication and links to Level 1 via
+     * [botbyeResult], not a raw token. A token together with user/event context is a combined
+     * Level 1+2 call — use [evaluateFull].
+     */
     suspend fun evaluateRiskScoring(
         request: R,
         user: BotbyeUserInfo,
         eventType: String,
         eventStatus: BotbyeEventStatus,
-        token: String? = null,
         botbyeResult: String? = null,
         customFields: Map<String, String> = emptyMap(),
     ): BotbyeEvaluateResponse {
         val info = requireExtractor().extract(request)
 
+        // Canonical risk shape from ip + headers (no token / URL context), same as the
+        // BotbyeRiskScoringEvent(ip, headers, ...) factory, regardless of what the shared extractor pulled out.
         return evaluate(
             BotbyeRiskScoringEvent(
-                request = info.copy(token = token ?: info.token),
-                event = BotbyeEventInfo(type = eventType, status = eventStatus),
+                ip = info.ip,
+                headers = info.headers,
                 user = user,
-                botbyeResult = botbyeResult?.takeIf { it.isNotBlank() },
+                eventType = eventType,
+                eventStatus = eventStatus,
+                botbyeResult = botbyeResult,
                 customFields = customFields,
             ),
         )
