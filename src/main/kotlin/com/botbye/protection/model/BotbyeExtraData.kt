@@ -25,4 +25,5 @@ data class BotbyeExtraData(
      */
     val realIp: String? = null,
     val realCountry: String? = null,
+    val realOrigin: String? = null,
 )

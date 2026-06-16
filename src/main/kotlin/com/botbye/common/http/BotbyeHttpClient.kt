@@ -1,8 +1,6 @@
 package com.botbye.common.http
 
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -10,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import java.io.Closeable
 import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -81,11 +80,18 @@ data class BotbyeHttpResponse(
  * (any HTTP stack) by passing it to the [com.botbye.protection.Botbye] /
  * [com.botbye.phishing.BotbyePhishingClient] constructors. The default is [OkHttpBotbyeClient].
  */
-interface BotbyeHttpClient {
+interface BotbyeHttpClient : Closeable {
     /** Identifier of the transport implementation, e.g. `"okhttp"`. Sent for diagnostics. */
     val type: String
 
     suspend fun call(request: BotbyeHttpRequest): BotbyeHttpResponse
+
+    /**
+     * Release any transport-owned resources (thread pools, connection pools). Default is a no-op for
+     * stateless implementations. Only invoked by a client that owns this transport (i.e. created the
+     * default); a transport passed in by the caller is never closed by the SDK.
+     */
+    override fun close() {}
 }
 
 /**
@@ -97,38 +103,9 @@ class OkHttpBotbyeClient(
 ) : BotbyeHttpClient {
     override val type: String = "okhttp"
 
-    override suspend fun call(request: BotbyeHttpRequest): BotbyeHttpResponse {
-        val response = enqueue(buildRequest(request))
-
-        return withContext(Dispatchers.IO) {
-            response.use { resp ->
-                BotbyeHttpResponse(
-                    status = resp.code,
-                    headers = buildMap(resp.headers.size) {
-                        for (i in 0 until resp.headers.size) {
-                            put(resp.headers.name(i), resp.headers.value(i))
-                        }
-                    },
-                    body = resp.body?.bytes() ?: byteArrayOf(),
-                )
-            }
-        }
-    }
-
-    private fun buildRequest(request: BotbyeHttpRequest): Request {
-        val body = request.body?.toRequestBody(request.contentType?.toMediaTypeOrNull())
-        val builder = Request.Builder()
-            .url(request.url)
-            .method(request.method, body)
-
-        request.headers.forEach { (name, value) -> builder.header(name, value) }
-
-        return builder.build()
-    }
-
-    private suspend fun enqueue(request: Request): Response =
+    override suspend fun call(request: BotbyeHttpRequest): BotbyeHttpResponse =
         suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
+            val call = client.newCall(buildRequest(request))
 
             continuation.invokeOnCancellation {
                 call.cancel()
@@ -142,14 +119,50 @@ class OkHttpBotbyeClient(
                         }
                     }
 
+                    // Body is buffered and the response closed here, on OkHttp's callback thread, before
+                    // resuming the caller. No open Response ever escapes this callback, so a caller that is
+                    // cancelled mid-flight can never leak a connection — `use` always releases it.
                     override fun onResponse(call: Call, response: Response) {
-                        if (continuation.isActive) {
-                            continuation.resume(response)
-                        } else {
-                            response.close()
+                        try {
+                            val mapped = response.use { resp ->
+                                BotbyeHttpResponse(
+                                    status = resp.code,
+                                    headers = buildMap(resp.headers.size) {
+                                        for (i in 0 until resp.headers.size) {
+                                            put(resp.headers.name(i), resp.headers.value(i))
+                                        }
+                                    },
+                                    body = resp.body?.bytes() ?: byteArrayOf(),
+                                )
+                            }
+                            if (continuation.isActive) {
+                                continuation.resume(mapped)
+                            }
+                        } catch (e: Throwable) {
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(e)
+                            }
                         }
                     }
                 },
             )
         }
+
+    private fun buildRequest(request: BotbyeHttpRequest): Request {
+        val body = request.body?.toRequestBody(request.contentType?.toMediaTypeOrNull())
+        val builder = Request.Builder()
+            .url(request.url)
+            .method(request.method, body)
+
+        request.headers.forEach { (name, value) -> builder.header(name, value) }
+
+        return builder.build()
+    }
+
+    /** Shuts down the dispatcher's thread pool and evicts pooled connections so no threads leak. */
+    override fun close() {
+        client.dispatcher.executorService.shutdown()
+        client.connectionPool.evictAll()
+        client.cache?.close()
+    }
 }

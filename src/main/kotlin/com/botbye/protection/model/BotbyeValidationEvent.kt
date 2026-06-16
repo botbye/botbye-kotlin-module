@@ -1,6 +1,7 @@
 package com.botbye.protection.model
 
 import com.botbye.common.ModuleInfo
+import com.botbye.common.http.Headers
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
@@ -27,7 +28,7 @@ data class BotbyeValidationEvent(
         operator fun invoke(
             ip: String,
             token: String,
-            headers: Map<String, String>,
+            headers: Headers,
             requestMethod: String? = null,
             requestUri: String,
             customFields: Map<String, String> = emptyMap(),

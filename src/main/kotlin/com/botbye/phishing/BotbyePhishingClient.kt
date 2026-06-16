@@ -3,6 +3,7 @@ package com.botbye.phishing
 import com.botbye.common.BotbyeError
 import com.botbye.common.ErrorClassifier
 import com.botbye.common.ModuleInfo
+import com.botbye.common.normalizeBaseUrl
 import com.botbye.common.http.BotbyeHttpClient
 import com.botbye.common.http.BotbyeHttpRequest
 import com.botbye.common.http.OkHttpBotbyeClient
@@ -10,6 +11,7 @@ import com.botbye.common.http.OkHttpClientFactory
 import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.io.Closeable
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
@@ -49,13 +51,25 @@ private fun defaultPhishingHttpClient(): BotbyeHttpClient =
  *   pass only their raw request to [fetchImage].
  */
 class BotbyePhishingClient<R> private constructor(
-    private var config: BotbyePhishingConfig,
+    config: BotbyePhishingConfig,
     private val client: BotbyeHttpClient,
     private val extractor: BotbyePhishingRequestExtractor<R>?,
-) {
+    private val ownsClient: Boolean,
+) : Closeable {
     private val logger: Logger = LoggerFactory.getLogger(BotbyePhishingClient::class.java)
+
+    // @Volatile so a concurrent setConf() publishes the new URLs to other threads; fetchImage / sendInit
+    // each read one of these, so no cross-field consistency is required between them.
+    @Volatile
     private var phishingBaseUrl: String = buildPhishingBaseUrl(config)
+
+    @Volatile
     private var phishingInitUrl: String = buildPhishingInitUrl(config)
+
+    private val moduleHeaders: Map<String, String> = mapOf(
+        "Module-Name" to ModuleInfo.NAME,
+        "Module-Version" to ModuleInfo.VERSION,
+    )
 
     init {
         runBlocking {
@@ -64,11 +78,20 @@ class BotbyePhishingClient<R> private constructor(
     }
 
     companion object {
-        /** Standalone client; pass the `Origin` header to [fetchImage] explicitly. */
+        /**
+         * Standalone client; pass the `Origin` header to [fetchImage] explicitly. Pass [client] to
+         * reuse your own transport; when omitted the SDK creates and owns a default OkHttp client that
+         * [close] will shut down (a passed-in client is never closed by the SDK).
+         */
         operator fun invoke(
             config: BotbyePhishingConfig,
-            client: BotbyeHttpClient = defaultPhishingHttpClient(),
-        ): BotbyePhishingClient<Nothing> = BotbyePhishingClient(config, client, extractor = null)
+            client: BotbyeHttpClient? = null,
+        ): BotbyePhishingClient<Nothing> = BotbyePhishingClient(
+            config,
+            client ?: defaultPhishingHttpClient(),
+            extractor = null,
+            ownsClient = client == null,
+        )
 
         /**
          * Factory for framework SDKs: bind a [BotbyePhishingRequestExtractor] so consumers pass only
@@ -77,21 +100,32 @@ class BotbyePhishingClient<R> private constructor(
         fun <R> withExtractor(
             config: BotbyePhishingConfig,
             extractor: BotbyePhishingRequestExtractor<R>,
-            client: BotbyeHttpClient = defaultPhishingHttpClient(),
-        ): BotbyePhishingClient<R> = BotbyePhishingClient(config, client, extractor)
+            client: BotbyeHttpClient? = null,
+        ): BotbyePhishingClient<R> = BotbyePhishingClient(
+            config,
+            client ?: defaultPhishingHttpClient(),
+            extractor,
+            ownsClient = client == null,
+        )
     }
 
     fun setConf(config: BotbyePhishingConfig) {
-        this.config = config.copy()
         phishingBaseUrl = buildPhishingBaseUrl(config)
         phishingInitUrl = buildPhishingInitUrl(config)
     }
 
+    /** Releases the underlying transport only if this client created it (a passed-in client is left alone). */
+    override fun close() {
+        if (ownsClient) {
+            client.close()
+        }
+    }
+
     private fun buildPhishingBaseUrl(conf: BotbyePhishingConfig): String =
-        "${conf.endpoint}/api/v1/phishing/image/${conf.clientKey}/server"
+        "${normalizeBaseUrl(conf.endpoint)}/api/v1/phishing/image/${conf.clientKey}/server"
 
     private fun buildPhishingInitUrl(conf: BotbyePhishingConfig): String =
-        "${conf.endpoint}/api/v1/phishing/init-request/v1/${conf.clientKey}"
+        "${normalizeBaseUrl(conf.endpoint)}/api/v1/phishing/init-request/v1/${conf.clientKey}"
 
     /**
      * Fetch the tracking pixel using an explicit `Origin` header value. [query] is forwarded verbatim
@@ -104,7 +138,7 @@ class BotbyePhishingClient<R> private constructor(
                 BotbyeHttpRequest(
                     url = buildImageUrl(query),
                     method = "GET",
-                    headers = moduleHeaders() + ("Origin" to (origin ?: "origin is missing")),
+                    headers = moduleHeaders + ("Origin" to (origin ?: "origin is missing")),
                 ),
             )
 
@@ -114,7 +148,9 @@ class BotbyePhishingClient<R> private constructor(
                 body = response.body,
             )
         } catch (e: Exception) {
-            logger.warn("[BotBye] phishing image exception occurred: {}", e.message, e)
+            // Message only: this is on the per-request pixel path, so a stack trace per call would
+            // flood logs during a backend outage.
+            logger.warn("[BotBye] phishing image fetch failed: {}", e.message)
             BotbyePhishingResponse(error = BotbyeError(ErrorClassifier.classify(e)))
         }
     }
@@ -152,7 +188,7 @@ class BotbyePhishingClient<R> private constructor(
                 BotbyeHttpRequest(
                     url = phishingInitUrl,
                     method = "POST",
-                    headers = moduleHeaders(),
+                    headers = moduleHeaders,
                     body = ByteArray(0),
                 ),
             )
@@ -161,14 +197,10 @@ class BotbyePhishingClient<R> private constructor(
                 logger.warn("[BotBye] phishing init-request returned HTTP {}", response.status)
             }
         } catch (e: Exception) {
+            // Best-effort handshake at construction time; log full context (fires once, not per request).
             logger.warn("[BotBye] phishing init-request exception occurred: {}", e.message, e)
         }
     }
-
-    private fun moduleHeaders(): Map<String, String> = mapOf(
-        "Module-Name" to ModuleInfo.NAME,
-        "Module-Version" to ModuleInfo.VERSION,
-    )
 
     private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
 }

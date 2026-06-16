@@ -3,6 +3,7 @@ package com.botbye.protection
 import com.botbye.common.BotbyeErrors
 import com.botbye.common.ErrorClassifier
 import com.botbye.common.ModuleInfo
+import com.botbye.common.normalizeBaseUrl
 import com.botbye.common.http.BotbyeHttpClient
 import com.botbye.common.http.BotbyeHttpRequest
 import com.botbye.common.http.OkHttpBotbyeClient
@@ -22,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.io.Closeable
 
 private fun defaultEvaluateHttpClient(config: BotbyeConfig): BotbyeHttpClient =
     OkHttpBotbyeClient(
@@ -50,13 +52,22 @@ private fun defaultEvaluateHttpClient(config: BotbyeConfig): BotbyeHttpClient =
  * makes the raw-request `evaluate*` methods uncallable at compile time.
  */
 class Botbye<R> private constructor(
-    private var botbyeConfig: BotbyeConfig,
+    initialConfig: BotbyeConfig,
     private val client: BotbyeHttpClient,
     private val mapper: ObjectMapper,
     private val extractor: BotbyeRequestExtractor<R>?,
-) : BotbyeEvaluator {
+    private val ownsClient: Boolean,
+) : BotbyeEvaluator, Closeable {
     private val logger: Logger = LoggerFactory.getLogger(Botbye::class.java)
-    private var evaluateBaseUrl: String = "${botbyeConfig.botbyeEndpoint}/api/v1/protect/evaluate"
+
+    // Read once per request into a local so a concurrent setConf() can never tear the endpoint/key apart.
+    @Volatile
+    private var botbyeConfig: BotbyeConfig = initialConfig
+
+    private val moduleHeaders: Map<String, String> = mapOf(
+        "Module-Name" to ModuleInfo.NAME,
+        "Module-Version" to ModuleInfo.VERSION,
+    )
 
     init {
         runBlocking {
@@ -65,12 +76,22 @@ class Botbye<R> private constructor(
     }
 
     companion object {
-        /** Explicit-event client (no extractor). Build [BotbyeEvent]s yourself and call [evaluate]. */
+        /**
+         * Explicit-event client (no extractor). Build [BotbyeEvent]s yourself and call [evaluate].
+         * Pass [client] to reuse your own transport; when omitted the SDK creates and owns a default
+         * OkHttp client that [close] will shut down (a passed-in client is never closed by the SDK).
+         */
         operator fun invoke(
             config: BotbyeConfig,
-            client: BotbyeHttpClient = defaultEvaluateHttpClient(config),
+            client: BotbyeHttpClient? = null,
             mapper: ObjectMapper = ObjectMapperFactory().createObjectMapper(),
-        ): Botbye<Nothing> = Botbye(config, client, mapper, extractor = null)
+        ): Botbye<Nothing> = Botbye(
+            config,
+            client ?: defaultEvaluateHttpClient(config),
+            mapper,
+            extractor = null,
+            ownsClient = client == null,
+        )
 
         /**
          * Factory for framework SDKs: bind a [BotbyeRequestExtractor] so consumers pass only their
@@ -79,24 +100,31 @@ class Botbye<R> private constructor(
         fun <R> withExtractor(
             config: BotbyeConfig,
             extractor: BotbyeRequestExtractor<R>,
-            client: BotbyeHttpClient = defaultEvaluateHttpClient(config),
+            client: BotbyeHttpClient? = null,
             mapper: ObjectMapper = ObjectMapperFactory().createObjectMapper(),
-        ): Botbye<R> = Botbye(config, client, mapper, extractor)
+        ): Botbye<R> = Botbye(
+            config,
+            client ?: defaultEvaluateHttpClient(config),
+            mapper,
+            extractor,
+            ownsClient = client == null,
+        )
     }
 
     /** Send a fully-built event for risk evaluation. Fails open: returns ALLOW + error on failure. */
     override suspend fun evaluate(event: BotbyeEvent): BotbyeEvaluateResponse {
+        val config = botbyeConfig
         val tokenQuery = event.urlToken?.let { "?$it" } ?: ""
-        val writer = mapper.writerFor(event::class.java).withAttribute("server_key", botbyeConfig.serverKey)
+        val writer = mapper.writerFor(event::class.java).withAttribute("server_key", config.serverKey)
 
         return try {
             val response = client.call(
                 BotbyeHttpRequest(
-                    url = "$evaluateBaseUrl$tokenQuery",
+                    url = "${normalizeBaseUrl(config.botbyeEndpoint)}/api/v1/protect/evaluate$tokenQuery",
                     method = "POST",
-                    headers = moduleHeaders(),
+                    headers = moduleHeaders,
                     body = writer.writeValueAsBytes(event),
-                    contentType = botbyeConfig.contentType,
+                    contentType = config.contentType,
                 ),
             )
 
@@ -106,7 +134,9 @@ class Botbye<R> private constructor(
                 else -> mapper.readValue(response.body, BotbyeEvaluateResponse::class.java)
             }
         } catch (e: Exception) {
-            logger.warn("[BotBye] exception occurred: {}", e.message, e)
+            // Message only: under a backend outage this fires per request, so a full stack trace per
+            // call would flood logs exactly when the system is already stressed.
+            logger.warn("[BotBye] evaluate failed, failing open: {}", e.message)
             createFallbackEvaluationResult(ErrorClassifier.classify(e))
         }
     }
@@ -173,7 +203,13 @@ class Botbye<R> private constructor(
 
     override fun setConf(config: BotbyeConfig) {
         botbyeConfig = config
-        evaluateBaseUrl = "${config.botbyeEndpoint}/api/v1/protect/evaluate"
+    }
+
+    /** Releases the underlying transport only if this client created it (a passed-in client is left alone). */
+    override fun close() {
+        if (ownsClient) {
+            client.close()
+        }
     }
 
     private fun requireExtractor(): BotbyeRequestExtractor<R> =
@@ -182,14 +218,15 @@ class Botbye<R> private constructor(
         )
 
     private suspend fun initRequest() {
+        val config = botbyeConfig
         try {
             val response = client.call(
                 BotbyeHttpRequest(
-                    url = "${botbyeConfig.botbyeEndpoint.trimEnd('/')}/init-request/v1",
+                    url = "${normalizeBaseUrl(config.botbyeEndpoint)}/init-request/v1",
                     method = "POST",
-                    headers = moduleHeaders(),
-                    body = mapper.writeValueAsBytes(InitRequest(botbyeConfig.serverKey)),
-                    contentType = botbyeConfig.contentType,
+                    headers = moduleHeaders,
+                    body = mapper.writeValueAsBytes(InitRequest(config.serverKey)),
+                    contentType = config.contentType,
                 ),
             )
 
@@ -203,12 +240,8 @@ class Botbye<R> private constructor(
                 logger.warn("[BotBye] init-request error = {}; status = {}", parsed?.error, parsed?.status)
             }
         } catch (e: Exception) {
-            logger.warn("[BotBye] exception occurred: {}", e.message, e)
+            // Best-effort handshake at construction time; log full context (fires once, not per request).
+            logger.warn("[BotBye] init-request exception occurred: {}", e.message, e)
         }
     }
-
-    private fun moduleHeaders(): Map<String, String> = mapOf(
-        "Module-Name" to ModuleInfo.NAME,
-        "Module-Version" to ModuleInfo.VERSION,
-    )
 }

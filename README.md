@@ -66,13 +66,24 @@ val botbye = Botbye(config)
 
 Validate device tokens where user identity is not yet available — at the proxy layer or in a middleware before authentication.
 
+Headers are passed as a `com.botbye.common.http.Headers` wrapping your framework's **multi-value** headers (`Map<String, List<String>>`). The SDK owns the normalization (lowercased keys, comma-joined values) at serialization time, so you never flatten them yourself:
+
+```kotlin
+import com.botbye.common.http.Headers
+
+// Build a Headers from your framework request once, reuse everywhere.
+fun headersOf(req: HttpServletRequest) = Headers(
+    req.headerNames.toList().associateWith { req.getHeaders(it).toList() },
+)
+```
+
 ```kotlin
 import com.botbye.protection.model.BotbyeValidationEvent
 
 val response = botbye.evaluate(BotbyeValidationEvent(
     ip = request.remoteAddr,
     token = request.getParameter("botbye_token") ?: "", // extract the token from wherever you pass it: query param, header, body, etc.
-    headers = flattenHeaders(request),
+    headers = headersOf(request),
     requestMethod = request.method,
     requestUri = request.requestURI,
 ))
@@ -94,7 +105,7 @@ import com.botbye.protection.model.BotbyeDecision
 
 val response = botbye.evaluate(BotbyeRiskScoringEvent(
     ip = request.remoteAddr,
-    headers = flattenHeaders(request),
+    headers = headersOf(request),
     user = BotbyeUserInfo(
         accountId = userId,
         email = userEmail,       // optional
@@ -135,7 +146,7 @@ Even when you don't need to act on the decision, sending events builds the metri
 // Log a failed login attempt — feeds metrics even if you don't act on the decision
 botbye.evaluate(BotbyeRiskScoringEvent(
     ip = request.remoteAddr,
-    headers = flattenHeaders(request),
+    headers = headersOf(request),
     user = BotbyeUserInfo(accountId = userId),
     eventType = "LOGIN",
     eventStatus = BotbyeEventStatus.FAILED,
@@ -144,7 +155,7 @@ botbye.evaluate(BotbyeRiskScoringEvent(
 // Log a custom business event
 botbye.evaluate(BotbyeRiskScoringEvent(
     ip = request.remoteAddr,
-    headers = flattenHeaders(request),
+    headers = headersOf(request),
     user = BotbyeUserInfo(accountId = userId),
     eventType = "BONUS_CLAIM",
     eventStatus = BotbyeEventStatus.SUCCESSFUL,
@@ -162,7 +173,7 @@ import com.botbye.protection.model.BotbyeFullEvent
 val response = botbye.evaluate(BotbyeFullEvent(
     ip = request.remoteAddr,
     token = request.getParameter("botbye_token") ?: "",
-    headers = flattenHeaders(request),
+    headers = headersOf(request),
     user = BotbyeUserInfo(accountId = userId),
     eventType = "LOGIN",
     eventStatus = BotbyeEventStatus.FAILED,
@@ -242,7 +253,7 @@ val res = phishing.fetchImage(request, query = request.parameterMap.mapValues { 
 | `riskScore` | `Double?` | Overall risk score (0–1) |
 | `scores` | `Map<String, Double>?` | Per-dimension scores (`bot`, `ato`, `abuse`, ...) |
 | `signals` | `Set<String>?` | Triggered signal names (e.g., `BruteForce`, `ImpossibleTravel`) |
-| `challenge` | `BotbyeChallenge?` | Challenge type and token (when decision is `CHALLENGE`) |
+| `challenge` | `BotbyeChallenge?` | Challenge type (when decision is `CHALLENGE`) |
 | `extraData` | `BotbyeExtraData?` | Enriched device data (IP, country, browser, device, etc.) |
 | `error` | `BotbyeError?` | Error details (on fallback) |
 | `botbyeResult` | `String?` | Encoded result for Level 1→2 propagation |
@@ -313,13 +324,14 @@ framework request type:
 import com.botbye.protection.Botbye
 import com.botbye.protection.BotbyeConfig
 import com.botbye.protection.model.BotbyeRequestInfo
+import com.botbye.common.http.Headers
 
 val botbye: Botbye<HttpServletRequest> = Botbye.withExtractor(
     config = BotbyeConfig(serverKey = "your-server-key"),
 ) { req ->
     BotbyeRequestInfo(
         ip = req.remoteAddr,
-        headers = req.headerNames.toList().associateWith { req.getHeader(it) },
+        headers = Headers(req.headerNames.toList().associateWith { req.getHeaders(it).toList() }),
         requestMethod = req.method,
         requestUri = req.requestURI,
         token = req.getParameter("botbye_token"),
@@ -363,7 +375,7 @@ An explicit `token` argument on any `evaluate*` method overrides the one returne
 val botbye: Botbye<HttpServletRequest> = Botbye.withExtractor(BotbyeConfig(serverKey = "...")) { req ->
     BotbyeRequestInfo(
         ip = req.remoteAddr,
-        headers = req.headerNames.toList().associateWith { req.getHeader(it) },
+        headers = Headers(req.headerNames.toList().associateWith { req.getHeaders(it).toList() }),
         requestMethod = req.method,
         requestUri = req.requestURI,
         token = req.getParameter("botbye_token"),
@@ -380,11 +392,12 @@ if (botbye.evaluateValidation(request).isBlocked) {
 
 ```kotlin
 import io.ktor.server.request.*
+import com.botbye.common.http.Headers
 
 val botbye: Botbye<ApplicationRequest> = Botbye.withExtractor(BotbyeConfig(serverKey = "...")) { req ->
     BotbyeRequestInfo(
         ip = req.local.remoteAddress,
-        headers = req.headers.entries().associate { (k, v) -> k to v.joinToString(", ") },
+        headers = Headers(req.headers.toMap()),
         requestMethod = req.httpMethod.value,
         requestUri = req.uri,
         token = req.queryParameters["botbye_token"],
@@ -418,6 +431,18 @@ class MyHttpClient : BotbyeHttpClient {
 
 val botbye = Botbye(config = BotbyeConfig(serverKey = "..."), client = MyHttpClient())
 ```
+
+## Lifecycle
+
+Construct the client **once** and reuse it for the lifetime of your application — it owns a connection
+pool and a dispatcher thread pool. Both `Botbye` and `BotbyePhishingClient` implement `Closeable`:
+
+```kotlin
+botbye.close() // shuts down the default OkHttp transport (dispatcher + connection pool)
+```
+
+`close()` only shuts down the transport the SDK created for you. If you passed your own
+`BotbyeHttpClient`, the SDK never closes it — you own its lifecycle.
 
 ## Helpers
 

@@ -1,12 +1,11 @@
 package com.botbye.protection
 
-import com.botbye.common.normalizeBaseUrl
 import java.time.Duration
 
 data class BotbyeConfig(
-    var botbyeEndpoint: String = "https://verify.botbye.com",
-    var serverKey: String,
-    var contentType: String = "application/json",
+    val botbyeEndpoint: String = "https://verify.botbye.com",
+    val serverKey: String,
+    val contentType: String = "application/json",
     // client config
     val readTimeout: Duration = Duration.ofSeconds(2),
     val writeTimeout: Duration = Duration.ofSeconds(2),
@@ -21,6 +20,5 @@ data class BotbyeConfig(
 ) {
     init {
         require(serverKey.isNotBlank()) { "[BotBye] server key is not specified" }
-        botbyeEndpoint = normalizeBaseUrl(botbyeEndpoint)
     }
 }
