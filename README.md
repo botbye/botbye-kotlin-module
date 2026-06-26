@@ -14,13 +14,13 @@ BotBye goes beyond fixed bot/ATO checks. Risk dimensions and metrics are fully d
 ### Gradle (Kotlin DSL)
 
 ```kotlin
-implementation("com.botbye:kotlin-module:3.0.0")
+implementation("com.botbye:kotlin-module:3.0.1")
 ```
 
 ### Gradle (Groovy DSL)
 
 ```groovy
-implementation 'com.botbye:kotlin-module:3.0.0'
+implementation 'com.botbye:kotlin-module:3.0.1'
 ```
 
 ### Maven
@@ -29,7 +29,7 @@ implementation 'com.botbye:kotlin-module:3.0.0'
 <dependency>
     <groupId>com.botbye</groupId>
     <artifactId>kotlin-module</artifactId>
-    <version>3.0.0</version>
+    <version>3.0.1</version>
 </dependency>
 ```
 

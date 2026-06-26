@@ -134,11 +134,18 @@ class BotbyePhishingClient<R> private constructor(
      */
     suspend fun fetchImage(origin: String?, query: Map<String, String> = emptyMap()): BotbyePhishingResponse {
         return try {
+            // Only forward Origin when the caller has a real value
+            val headers = if (isMissingOrigin(origin)) {
+                moduleHeaders
+            } else {
+                moduleHeaders + ("Origin" to origin!!)
+            }
+
             val response = client.call(
                 BotbyeHttpRequest(
                     url = buildImageUrl(query),
                     method = "GET",
-                    headers = moduleHeaders + ("Origin" to (origin ?: "origin is missing")),
+                    headers = headers,
                 ),
             )
 
@@ -203,4 +210,9 @@ class BotbyePhishingClient<R> private constructor(
     }
 
     private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
+
+    // The Origin is unusable when absent, blank, or the literal "null" that browsers emit for opaque
+    // origins (and that a stringified null produces)
+    private fun isMissingOrigin(origin: String?): Boolean =
+        origin.isNullOrBlank() || origin.trim().equals("null", ignoreCase = true)
 }
