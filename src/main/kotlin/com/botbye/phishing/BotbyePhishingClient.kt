@@ -1,6 +1,7 @@
 package com.botbye.phishing
 
 import com.botbye.common.BotbyeError
+import com.botbye.common.BotbyeErrors
 import com.botbye.common.ErrorClassifier
 import com.botbye.common.ModuleInfo
 import com.botbye.common.normalizeBaseUrl
@@ -16,9 +17,8 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 
-// Phishing fetchImage is an idempotent GET, so the client retries on connection failure: a stale
-// pooled keep-alive connection (closed by the server while idle) is transparently re-established
-// instead of surfacing "unexpected end of stream".
+// fetchCatcher is an idempotent GET, so retry on connection failure: a stale pooled connection is
+// re-established instead of surfacing "unexpected end of stream".
 private fun defaultPhishingHttpClient(): BotbyeHttpClient =
     OkHttpBotbyeClient(
         OkHttpClientFactory().createClient(
@@ -35,20 +35,13 @@ private fun defaultPhishingHttpClient(): BotbyeHttpClient =
     )
 
 /**
- * Phishing-only client. Authenticates with the public [BotbyePhishingConfig.clientKey] embedded in
- * the URL path — it needs no server key, so it can be constructed independently of the evaluate
- * [com.botbye.protection.Botbye] client.
+ * Phishing-only client, keyed by the public [BotbyePhishingConfig.clientKey] — no server key needed.
+ * [fetchCatcher] proxies the asset via the `/server` route so the backend can attribute it even though
+ * the browser never reaches BotBye; construction fires a best-effort init handshake.
  *
- * On construction it fires a best-effort server-integration init handshake
- * (`POST /api/v1/phishing/init-request/v1/{clientKey}`), reporting this module via the `Module-Name`
- * / `Module-Version` headers. [fetchImage] fetches the tracking pixel server-side via the `/server`
- * route, which lets the backend attribute the pixel to this module even when the browser never hits
- * BotBye directly (the SDK proxies the image).
- *
- * Two construction modes:
- * - [BotbyePhishingClient] `(config)` — pass the `Origin` header to [fetchImage] yourself.
- * - [withExtractor] — binds a [BotbyePhishingRequestExtractor] of framework request `R` so callers
- *   pass only their raw request to [fetchImage].
+ * - [BotbyePhishingClient] `(config)` — pass `Origin` / `Referer` to [fetchCatcher] yourself.
+ * - [withExtractor] — bind a [BotbyePhishingRequestExtractor] of request `R` and pass only the raw
+ *   request to [fetchCatcher].
  */
 class BotbyePhishingClient<R> private constructor(
     config: BotbyePhishingConfig,
@@ -58,8 +51,8 @@ class BotbyePhishingClient<R> private constructor(
 ) : Closeable {
     private val logger: Logger = LoggerFactory.getLogger(BotbyePhishingClient::class.java)
 
-    // @Volatile so a concurrent setConf() publishes the new URLs to other threads; fetchImage / sendInit
-    // each read one of these, so no cross-field consistency is required between them.
+    // @Volatile so a concurrent setConf() publishes to other threads; each reader takes one URL, so no
+    // cross-field consistency is needed.
     @Volatile
     private var phishingBaseUrl: String = buildPhishingBaseUrl(config)
 
@@ -78,11 +71,20 @@ class BotbyePhishingClient<R> private constructor(
     }
 
     companion object {
-        /**
-         * Standalone client; pass the `Origin` header to [fetchImage] explicitly. Pass [client] to
-         * reuse your own transport; when omitted the SDK creates and owns a default OkHttp client that
-         * [close] will shut down (a passed-in client is never closed by the SDK).
-         */
+        private const val FORMAT_PARAM = "format"
+        private const val IMAGE_ID_PARAM = "image_id"
+        private const val EXECUTABLE_PARAM = "executable"
+        private const val MODULE_NAME_PARAM = "module_name"
+        private const val MODULE_VERSION_PARAM = "module_version"
+
+        // Whitelist, not blacklist: the endpoint is public, so a control param the route adds later must
+        // not become forwardable by default.
+        private val FORWARDABLE_PARAMS = setOf(MODULE_NAME_PARAM, MODULE_VERSION_PARAM)
+
+        private fun errorStatus(message: String): Int =
+            if (message == BotbyeErrors.TIMEOUT_ERROR) 504 else 502
+
+        /** Standalone client. Pass [client] to reuse your transport — the SDK only [close]s its own. */
         operator fun invoke(
             config: BotbyePhishingConfig,
             client: BotbyeHttpClient? = null,
@@ -93,10 +95,7 @@ class BotbyePhishingClient<R> private constructor(
             ownsClient = client == null,
         )
 
-        /**
-         * Factory for framework SDKs: bind a [BotbyePhishingRequestExtractor] so consumers pass only
-         * their raw request object to [fetchImage].
-         */
+        /** Framework SDKs: bind an extractor so consumers pass only their raw request. */
         fun <R> withExtractor(
             config: BotbyePhishingConfig,
             extractor: BotbyePhishingRequestExtractor<R>,
@@ -114,7 +113,7 @@ class BotbyePhishingClient<R> private constructor(
         phishingInitUrl = buildPhishingInitUrl(config)
     }
 
-    /** Releases the underlying transport only if this client created it (a passed-in client is left alone). */
+    /** Releases the transport only if this client created it. */
     override fun close() {
         if (ownsClient) {
             client.close()
@@ -128,18 +127,63 @@ class BotbyePhishingClient<R> private constructor(
         "${normalizeBaseUrl(conf.endpoint)}/api/v1/phishing/init-request/v1/${conf.clientKey}"
 
     /**
-     * Fetch the tracking pixel using an explicit `Origin` header value. [query] is forwarded verbatim
-     * to the `/server` route — pass the browser's original pixel query (which carries `format`,
-     * `image_id`, and the JS tag's `module_name` / `module_version`).
+     * Fetch the catcher asset: [BotbyePhishingCatcher.Png] is the 1×1 pixel,
+     * [BotbyePhishingCatcher.Svg] the wrapper that makes the browser fetch it.
+     *
+     * @param catcher which asset, and its parameters — `Svg` cannot be built without its `innerPngUrl`.
+     * @param referer pass next to [origin]: an `<object data="…svg">` pixel sends no `Origin`.
      */
-    suspend fun fetchImage(origin: String?, query: Map<String, String> = emptyMap()): BotbyePhishingResponse {
+    suspend fun fetchCatcher(
+        catcher: BotbyePhishingCatcher,
+        origin: String?,
+        referer: String?,
+    ): BotbyePhishingResponse = fetchCatcherAsset(
+        catcher = catcher,
+        info = BotbyePhishingRequestInfo(origin = origin, referer = referer),
+    )
+
+    suspend fun fetchCatcher(
+        request: R,
+        catcher: BotbyePhishingCatcher,
+    ): BotbyePhishingResponse = fetchCatcherAsset(
+        catcher = catcher,
+        info = extractRequestInfo(request),
+    )
+
+    private suspend fun fetchCatcherAsset(
+        catcher: BotbyePhishingCatcher,
+        info: BotbyePhishingRequestInfo,
+    ): BotbyePhishingResponse {
+        val catcherParams = when (catcher) {
+            is BotbyePhishingCatcher.Png -> emptyMap()
+
+            is BotbyePhishingCatcher.Svg -> mapOf(
+                // Non-blank by construction; trimmed because a padded URL fails the backend's
+                // absolute-URL check and silently falls back to BotBye's own PNG URL.
+                IMAGE_ID_PARAM to catcher.innerPngUrl.trim(),
+                EXECUTABLE_PARAM to if (catcher.skipExecution) "false" else "true",
+            )
+        }
+
+        return fetchAsset(
+            origin = info.origin,
+            referer = info.referer,
+            query = forwardable(info.query) + (FORMAT_PARAM to catcher.format) + catcherParams,
+        )
+    }
+
+    private suspend fun fetchAsset(
+        origin: String?,
+        referer: String?,
+        query: Map<String, String>,
+    ): BotbyePhishingResponse {
         return try {
-            // Only forward Origin when the caller has a real value
-            val headers = if (isMissingOrigin(origin)) {
-                moduleHeaders
-            } else {
-                moduleHeaders + ("Origin" to origin!!)
-            }
+            // Percent-encode rather than drop: a lost Referer is the only domain an SVG pixel names.
+            val headers = moduleHeaders +
+                listOfNotNull(
+                    usableHeaderValue(origin)?.let { "Origin" to it },
+                    usableHeaderValue(referer)?.let { "Referer" to it },
+                )
 
             val response = client.call(
                 BotbyeHttpRequest(
@@ -155,28 +199,29 @@ class BotbyePhishingClient<R> private constructor(
                 body = response.body,
             )
         } catch (e: Exception) {
-            // Message only: this is on the per-request pixel path, so a stack trace per call would
-            // flood logs during a backend outage.
+            // Message only: a stack trace per call would flood logs during a backend outage.
             logger.warn("[BotBye] phishing image fetch failed: {}", e.message)
-            BotbyePhishingResponse(error = BotbyeError(ErrorClassifier.classify(e)))
+
+            val message = ErrorClassifier.classify(e)
+
+            BotbyePhishingResponse(status = errorStatus(message), error = BotbyeError(message))
         }
-    }
-
-    /** Fetch the tracking pixel from a raw framework request (requires [withExtractor]). */
-    suspend fun fetchImage(request: R, query: Map<String, String> = emptyMap()): BotbyePhishingResponse {
-        val origin = requireExtractor().extractOrigin(request)
-
-        return fetchImage(origin = origin, query = query)
     }
 
     private fun buildImageUrl(query: Map<String, String>): String {
-        if (query.isEmpty()) {
-            return phishingBaseUrl
-        }
-
         val queryString = query.entries.joinToString("&") { (k, v) -> "${urlEncode(k)}=${urlEncode(v)}" }
 
-        return "$phishingBaseUrl?$queryString"
+        return if (queryString.isEmpty()) phishingBaseUrl else "$phishingBaseUrl?$queryString"
+    }
+
+     private fun forwardable(query: Map<String, List<String>>): Map<String, String> =
+        query.filterKeys { it in FORWARDABLE_PARAMS }
+            .mapNotNull { (key, values) -> values.firstOrNull()?.let { key to it } }
+            .toMap()
+
+    private fun extractRequestInfo(request: R): BotbyePhishingRequestInfo {
+        @Suppress("USELESS_ELVIS")
+        return requireExtractor().extract(request) ?: BotbyePhishingRequestInfo(origin = null, referer = null)
     }
 
     private fun requireExtractor(): BotbyePhishingRequestExtractor<R> =
@@ -185,9 +230,8 @@ class BotbyePhishingClient<R> private constructor(
         )
 
     /**
-     * Reports the server-side phishing integration to the backend (the `SERVER_INTEGRATION_INIT`
-     * get-started milestone). Best-effort: any failure is logged and swallowed, mirroring the evaluate
-     * client's init handshake, since it must never block or break the customer's startup.
+     * Reports the server-side phishing integration to the backend. Best-effort: never blocks the
+     * customer's startup.
      */
     private suspend fun sendInit() {
         try {
@@ -204,15 +248,32 @@ class BotbyePhishingClient<R> private constructor(
                 logger.warn("[BotBye] phishing init-request returned HTTP {}", response.status)
             }
         } catch (e: Exception) {
-            // Best-effort handshake at construction time; log full context (fires once, not per request).
+            // Fires once at construction, so log full context.
             logger.warn("[BotBye] phishing init-request exception occurred: {}", e.message, e)
         }
     }
 
     private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
 
-    // The Origin is unusable when absent, blank, or the literal "null" that browsers emit for opaque
-    // origins (and that a stringified null produces)
-    private fun isMissingOrigin(origin: String?): Boolean =
-        origin.isNullOrBlank() || origin.trim().equals("null", ignoreCase = true)
+    private fun usableHeaderValue(value: String?): String? {
+        if (value.isNullOrBlank() || value.trim().equals("null", ignoreCase = true)) {
+            return null
+        }
+
+        val trimmed = value.trim()
+        if (trimmed.none { it >= '\u007F' || (it <= '\u001F' && it != '\t') }) {
+            return trimmed
+        }
+
+        return buildString {
+            for (byte in trimmed.toByteArray(StandardCharsets.UTF_8)) {
+                val code = byte.toInt() and 0xFF
+                if (code >= 0x7F || (code <= 0x1F && code != '\t'.code)) {
+                    append('%').append(code.toString(16).uppercase().padStart(2, '0'))
+                } else {
+                    append(code.toChar())
+                }
+            }
+        }
+    }
 }
