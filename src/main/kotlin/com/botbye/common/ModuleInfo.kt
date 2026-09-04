@@ -7,5 +7,5 @@ package com.botbye.common
  */
 object ModuleInfo {
     const val NAME = "Kotlin"
-    const val VERSION = "3.0.1"
+    const val VERSION = "4.0.0"
 }

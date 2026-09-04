@@ -14,13 +14,13 @@ BotBye goes beyond fixed bot/ATO checks. Risk dimensions and metrics are fully d
 ### Gradle (Kotlin DSL)
 
 ```kotlin
-implementation("com.botbye:kotlin-module:3.0.1")
+implementation("com.botbye:kotlin-module:4.0.0")
 ```
 
 ### Gradle (Groovy DSL)
 
 ```groovy
-implementation 'com.botbye:kotlin-module:3.0.1'
+implementation 'com.botbye:kotlin-module:4.0.0'
 ```
 
 ### Maven
@@ -29,7 +29,7 @@ implementation 'com.botbye:kotlin-module:3.0.1'
 <dependency>
     <groupId>com.botbye</groupId>
     <artifactId>kotlin-module</artifactId>
-    <version>3.0.1</version>
+    <version>4.0.0</version>
 </dependency>
 ```
 
@@ -183,17 +183,19 @@ val response = botbye.evaluate(BotbyeFullEvent(
 ### 5. Phishing Image Tracking
 
 The phishing tracking pixel is embedded on a protected site; when a phishing clone copies the
-markup, the pixel is requested with the clone's `Origin`, which lets BotBye record a phishing
-candidate.
+markup, the pixel is requested with the clone's `Origin` — or, where the pixel is embedded as
+`<object data="…svg">` and no `Origin` is sent at all, with its `Referer`. Either header names the
+page, which is what lets BotBye record a phishing candidate.
 
 Phishing lives in its own dedicated `BotbyePhishingClient` — **separate from the evaluate `Botbye`
 client**. The project is identified by a public, browser-safe `clientKey` in the URL path, so the
 client needs **no server key**; you can construct it standalone. On construction it fires a
 best-effort server-integration init handshake (`POST /api/v1/phishing/init-request/v1/{clientKey}`)
-reporting this module, and `fetchImage` proxies the pixel via the server `/server` route so the
-backend can attribute it to this module even when the browser never reaches BotBye directly.
+reporting this module, and `fetchCatcher` proxies the asset via the server `/server` route so
+the backend can attribute it to this module even when the browser never reaches BotBye directly.
 
 ```kotlin
+import com.botbye.phishing.BotbyePhishingCatcher
 import com.botbye.phishing.BotbyePhishingClient
 import com.botbye.phishing.BotbyePhishingConfig
 
@@ -204,11 +206,23 @@ val phishing = BotbyePhishingClient(
     )
 )
 
-// Proxy the browser's pixel request: forward its original query verbatim (it carries
-// format / image_id and the JS tag's module_name / module_version).
-val res = phishing.fetchImage(
+// One method; the catcher you pass picks the asset. Pass Referer next to Origin — an SVG pixel embedded
+// as <object data="…svg"> sends no Origin, so Referer is the only header naming the page.
+val res = phishing.fetchCatcher(
+    BotbyePhishingCatcher.Png,
     origin = request.getHeader("Origin"),
-    query = request.parameterMap.mapValues { (_, v) -> v.first() },
+    referer = request.getHeader("Referer"),
+)
+
+// The SVG names the URL it embeds as the nested pixel: point it at your own PNG endpoint so that fetch
+// proxies through your origin too (BotBye honours it only as an absolute http(s) URL). It is a
+// constructor parameter, not an optional argument, so an SVG without one does not compile.
+val svg = phishing.fetchCatcher(
+    BotbyePhishingCatcher.Svg("https://your-site.example/example.png"),
+    // Svg(url, skipExecution = false) opts into the script-carrying variant; the default is script-less,
+    // no JS on the page.
+    origin = request.getHeader("Origin"),
+    referer = request.getHeader("Referer"),
 )
 
 res.status   // 200
@@ -217,29 +231,49 @@ res.body     // ByteArray — raw image bytes to relay back to the browser
 res.error    // BotbyeError? — non-null on transport failure
 ```
 
-`fetchImage` is a `suspend` function (like `evaluate`); wrap it in `runBlocking` in a servlet context.
+`fetchCatcher` is a `suspend` function (like `evaluate`); wrap it in `runBlocking` in a servlet context.
 
-Like the evaluate client, the phishing client supports a request extractor so a framework SDK can
-read the `Origin` from a raw request once and callers pass only their request object:
+`format`, `image_id` and `executable` are set by the call and never read off the request: the endpoint
+you expose is public, so a query on it must not be able to redirect the nested pixel fetch or pick the
+SVG variant behind your back. Only `module_name` and `module_version` pass through, and only via the
+extractor below. `executable` is always sent, never omitted, so the variant never rides on the backend's
+default for a missing param.
+
+Like the evaluate client, the phishing client supports a request extractor so a framework SDK maps a
+raw request to a `BotbyePhishingRequestInfo` once and callers pass only their request object. The
+extractor is the single place that reads the request — headers and query alike:
 
 ```kotlin
+import com.botbye.phishing.BotbyePhishingCatcher
 import com.botbye.phishing.BotbyePhishingClient
+import com.botbye.phishing.BotbyePhishingRequestExtractor
+import com.botbye.phishing.BotbyePhishingRequestInfo
 
 val phishing: BotbyePhishingClient<HttpServletRequest> = BotbyePhishingClient.withExtractor(
     BotbyePhishingConfig(clientKey = "<public-client-key>"),
-) { req -> req.getHeader("Origin") }
+    BotbyePhishingRequestExtractor { req ->
+        BotbyePhishingRequestInfo(
+            origin = req.getHeader("Origin"),
+            referer = req.getHeader("Referer"),
+            query = req.parameterMap.mapValues { (_, v) -> v.toList() },
+        )
+    },
+)
 
-// Origin via the extractor; forward the browser's pixel query for attribution
-val res = phishing.fetchImage(request, query = request.parameterMap.mapValues { (_, v) -> v.first() })
+val res = phishing.fetchCatcher(request, BotbyePhishingCatcher.Png)
+val svg = phishing.fetchCatcher(
+    request,
+    BotbyePhishingCatcher.Svg("https://your-site.example/example.png"),
+)
 ```
 
-`fetchImage` returns `BotbyePhishingResponse`:
+`fetchCatcher` returns `BotbyePhishingResponse`:
 
 | Field | Type | Description |
 |---|---|---|
-| `status` | `Int` | Upstream HTTP status (`0` on transport failure) |
+| `status` | `Int` | Upstream HTTP status. A transport failure has none, so it reports the gateway status it means: `504` for a timeout, `502` for anything else |
 | `headers` | `Map<String, String>` | Response headers (e.g. `Content-Type`) |
-| `body` | `ByteArray` | Raw image bytes (PNG or SVG, per the forwarded `format` query param) |
+| `body` | `ByteArray` | Raw image bytes (PNG or SVG, per the catcher you passed) |
 | `error` | `BotbyeError?` | Normalized transport error: `timeout`, `connection error`, or `invalid json response` |
 
 ## Response
@@ -323,20 +357,22 @@ framework request type:
 ```kotlin
 import com.botbye.protection.Botbye
 import com.botbye.protection.BotbyeConfig
+import com.botbye.protection.BotbyeRequestExtractor
 import com.botbye.protection.model.BotbyeRequestInfo
 import com.botbye.common.http.Headers
 
 val botbye: Botbye<HttpServletRequest> = Botbye.withExtractor(
     config = BotbyeConfig(serverKey = "your-server-key"),
-) { req ->
-    BotbyeRequestInfo(
-        ip = req.remoteAddr,
-        headers = Headers(req.headerNames.toList().associateWith { req.getHeaders(it).toList() }),
-        requestMethod = req.method,
-        requestUri = req.requestURI,
-        token = req.getParameter("botbye_token"),
-    )
-}
+    extractor = BotbyeRequestExtractor { req ->
+        BotbyeRequestInfo(
+            ip = req.remoteAddr,
+            headers = Headers(req.headerNames.toList().associateWith { req.getHeaders(it).toList() }),
+            requestMethod = req.method,
+            requestUri = req.requestURI,
+            token = req.getParameter("botbye_token"),
+        )
+    },
+)
 ```
 
 Now the call sites only pass the raw request (plus user/event for Level 2):
@@ -374,15 +410,18 @@ Level 1 via `botbyeResult`; a token together with user/event context is a combin
 ### Spring (HttpServletRequest)
 
 ```kotlin
-val botbye: Botbye<HttpServletRequest> = Botbye.withExtractor(BotbyeConfig(serverKey = "...")) { req ->
-    BotbyeRequestInfo(
-        ip = req.remoteAddr,
-        headers = Headers(req.headerNames.toList().associateWith { req.getHeaders(it).toList() }),
-        requestMethod = req.method,
-        requestUri = req.requestURI,
-        token = req.getParameter("botbye_token"),
-    )
-}
+val botbye: Botbye<HttpServletRequest> = Botbye.withExtractor(
+    BotbyeConfig(serverKey = "..."),
+    BotbyeRequestExtractor { req ->
+        BotbyeRequestInfo(
+            ip = req.remoteAddr,
+            headers = Headers(req.headerNames.toList().associateWith { req.getHeaders(it).toList() }),
+            requestMethod = req.method,
+            requestUri = req.requestURI,
+            token = req.getParameter("botbye_token"),
+        )
+    },
+)
 
 // in a filter / interceptor:
 if (botbye.evaluateValidation(request).isBlocked) {
@@ -395,16 +434,20 @@ if (botbye.evaluateValidation(request).isBlocked) {
 ```kotlin
 import io.ktor.server.request.*
 import com.botbye.common.http.Headers
+import com.botbye.protection.BotbyeRequestExtractor
 
-val botbye: Botbye<ApplicationRequest> = Botbye.withExtractor(BotbyeConfig(serverKey = "...")) { req ->
-    BotbyeRequestInfo(
-        ip = req.local.remoteAddress,
-        headers = Headers(req.headers.toMap()),
-        requestMethod = req.httpMethod.value,
-        requestUri = req.uri,
-        token = req.queryParameters["botbye_token"],
-    )
-}
+val botbye: Botbye<ApplicationRequest> = Botbye.withExtractor(
+    BotbyeConfig(serverKey = "..."),
+    BotbyeRequestExtractor { req ->
+        BotbyeRequestInfo(
+            ip = req.local.remoteAddress,
+            headers = Headers(req.headers.toMap()),
+            requestMethod = req.httpMethod.value,
+            requestUri = req.uri,
+            token = req.queryParameters["botbye_token"],
+        )
+    },
+)
 
 // in a plugin / interceptor:
 if (botbye.evaluateValidation(call.request).isBlocked) {
