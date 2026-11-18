@@ -3,11 +3,14 @@ package com.botbye.common.http
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.internal.http2.ErrorCode
+import okhttp3.internal.http2.StreamResetException
 import java.io.Closeable
 import java.io.IOException
 import kotlin.coroutines.resume
@@ -103,9 +106,11 @@ class OkHttpBotbyeClient(
 ) : BotbyeHttpClient {
     override val type: String = "okhttp"
 
+    private val callClient: OkHttpClient = client.newBuilder().addInterceptor(RetryRefusedStreamInterceptor).build()
+
     override suspend fun call(request: BotbyeHttpRequest): BotbyeHttpResponse =
         suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(buildRequest(request))
+            val call = callClient.newCall(buildRequest(request))
 
             continuation.invokeOnCancellation {
                 call.cancel()
@@ -164,5 +169,21 @@ class OkHttpBotbyeClient(
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
         client.cache?.close()
+    }
+}
+
+/**
+ * Sends a request once more when the server refused its HTTP/2 stream, which happens to every stream in flight when
+ * the server closes the connection with GOAWAY. A refused stream was never processed (RFC 9113 §8.7), so replaying an
+ * evaluate cannot spend its token twice; `retryOnConnectionFailure` stays off because it also replays requests the
+ * server may already have processed.
+ */
+private object RetryRefusedStreamInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response = try {
+        chain.proceed(chain.request())
+    } catch (e: StreamResetException) {
+        if (e.errorCode != ErrorCode.REFUSED_STREAM) throw e
+
+        chain.proceed(chain.request())
     }
 }

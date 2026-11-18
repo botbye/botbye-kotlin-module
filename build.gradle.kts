@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.botbye"
-version = "4.0.0"
+version = "4.0.1"
 
 repositories {
     mavenCentral()
@@ -34,6 +34,13 @@ dependencies {
     api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.18.2")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     api("org.slf4j:slf4j-api:2.0.16")
+
+    testImplementation(kotlin("test"))
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 publishing {
